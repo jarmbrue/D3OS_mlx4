@@ -34,7 +34,7 @@ dependencies = [
  "cfg-if",
  "once_cell",
  "version_check",
- "zerocopy",
+ "zerocopy 0.8.25",
 ]
 
 [[package]]
@@ -93,6 +93,26 @@ name = "autocfg"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ace50bade8e6234aa140d9a2f552bbee1db4d353f69b8217bc503490fc1a9f26"
+
+[[package]]
+name = "bincode"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36eaf5d7b090263e8150820482d5d93cd964a81e4019913c972f4edcc6edb740"
+dependencies = [
+ "bincode_derive",
+ "serde",
+ "unty",
+]
+
+[[package]]
+name = "bincode_derive"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf95709a440f45e986983918d0e8a1f30a9b1df04918fc828670606804ac3c09"
+dependencies = [
+ "virtue",
+]
 
 [[package]]
 name = "bit"
@@ -192,6 +212,31 @@ name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
+
+[[package]]
+name = "core2"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b49ba7ef1ad6107f8824dbe97de947cbaac53c44e7f9756a1fba0d37c1eec505"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "cpu-core"
+version = "0.1.0"
+dependencies = [
+ "raw-cpuid 11.5.0",
+]
+
+[[package]]
+name = "crc32fast"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
+dependencies = [
+ "cfg-if",
+]
 
 [[package]]
 name = "date"
@@ -429,6 +474,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "heck"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
 name = "hello"
 version = "0.1.0"
 dependencies = [
@@ -467,6 +518,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "ibstat"
+version = "0.1.0"
+dependencies = [
+ "rdma-core",
+ "runtime",
+ "terminal",
 ]
 
 [[package]]
@@ -628,7 +688,9 @@ dependencies = [
  "acpi",
  "bitflags 2.9.1",
  "built",
+ "byteorder",
  "chrono",
+ "core2",
  "drawer",
  "goblin",
  "graphic",
@@ -637,18 +699,24 @@ dependencies = [
  "llfree",
  "log",
  "mbrs",
+ "mm",
+ "modular-bitfield-msb",
  "multiboot2",
  "naming",
+ "network",
  "nolock",
- "num_enum",
+ "num_enum 0.7.3",
  "pc-keyboard",
  "pci_types",
  "ps2",
  "raw-cpuid 11.5.0",
+ "rdma",
  "smallmap",
  "smoltcp",
  "spin 0.9.8",
  "stream",
+ "strum",
+ "strum_macros",
  "syscall",
  "system_info",
  "tar-no-std",
@@ -656,8 +724,10 @@ dependencies = [
  "thingbuf",
  "uefi",
  "uefi-raw 0.10.0",
+ "volatile 0.2.7",
  "x2apic",
  "x86_64 0.15.2",
+ "zerocopy 0.5.2",
 ]
 
 [[package]]
@@ -834,6 +904,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3"
 
 [[package]]
+name = "mm"
+version = "0.1.0"
+dependencies = [
+ "bitflags 1.3.2",
+ "syscall",
+]
+
+[[package]]
+name = "modular-bitfield-msb"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4f8c4275b0126bb0086e739ee3210114e8f97965779de613d0e8c6bcf06ca5d"
+dependencies = [
+ "modular-bitfield-msb-impl",
+ "static_assertions",
+]
+
+[[package]]
+name = "modular-bitfield-msb-impl"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6239283b0bafd6b3a55a6a02bfce9a3e7fc6ebeffa6f75fe91a104267fcebbd"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "multiboot2"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -862,7 +961,7 @@ name = "naming"
 version = "0.1.0"
 dependencies = [
  "bitflags 1.3.2",
- "num_enum",
+ "num_enum 0.7.3",
  "syscall",
 ]
 
@@ -873,6 +972,16 @@ dependencies = [
  "network",
  "runtime",
  "terminal",
+]
+
+[[package]]
+name = "net-core"
+version = "0.1.0"
+dependencies = [
+ "naming",
+ "network",
+ "smoltcp",
+ "syscall",
 ]
 
 [[package]]
@@ -921,11 +1030,31 @@ dependencies = [
 
 [[package]]
 name = "num_enum"
+version = "0.5.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f646caf906c20226733ed5b1374287eb97e3c2a5c227ce668c1f2ce20ae57c9"
+dependencies = [
+ "num_enum_derive 0.5.11",
+]
+
+[[package]]
+name = "num_enum"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e613fc340b2220f734a8595782c551f1250e969d87d3be1ae0579e8d4065179"
 dependencies = [
- "num_enum_derive",
+ "num_enum_derive 0.7.3",
+]
+
+[[package]]
+name = "num_enum_derive"
+version = "0.5.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcbff9bc912032c62bf65ef1d5aea88983b420f4f839db1e9b0c281a25c9c799"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -1189,6 +1318,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "rdma"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.9.1",
+ "num_enum 0.5.11",
+ "strum_macros",
+]
+
+[[package]]
+name = "rdma-core"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "bitflags 2.9.1",
+ "core2",
+ "mm",
+ "rdma",
+ "spin 0.9.8",
+ "syscall",
+]
+
+[[package]]
+name = "rdma_test_mlx4"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "concurrent",
+ "cpu-core",
+ "crc32fast",
+ "mm",
+ "naming",
+ "net-core",
+ "network",
+ "rdma",
+ "rdma-core",
+ "runtime",
+ "smoltcp",
+ "spin 0.9.8",
+ "syscall",
+ "terminal",
+ "time",
+]
+
+[[package]]
 name = "regex"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1238,6 +1411,8 @@ version = "0.1.0"
 dependencies = [
  "concurrent",
  "linked_list_allocator",
+ "mm",
+ "stream",
  "syscall",
  "terminal",
 ]
@@ -1426,10 +1601,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
 name = "stream"
 version = "0.1.0"
 dependencies = [
  "pc-keyboard",
+]
+
+[[package]]
+name = "strum"
+version = "0.26.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
+
+[[package]]
+name = "strum_macros"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 2.0.101",
 ]
 
 [[package]]
@@ -1477,14 +1677,14 @@ name = "syscall"
 version = "0.1.0"
 dependencies = [
  "bitflags 1.3.2",
- "num_enum",
+ "num_enum 0.7.3",
 ]
 
 [[package]]
 name = "system_info"
 version = "0.1.0"
 dependencies = [
- "num_enum",
+ "num_enum 0.7.3",
  "syscall",
 ]
 
@@ -1506,7 +1706,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "logger",
- "num_enum",
+ "num_enum 0.7.3",
  "pc-keyboard",
  "spin 0.9.8",
  "stream",
@@ -1525,7 +1725,7 @@ dependencies = [
  "graphic",
  "input",
  "log",
- "num_enum",
+ "num_enum 0.7.3",
  "pc-keyboard",
  "runtime",
  "spin 0.10.0",
@@ -1776,6 +1976,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8eb5abf597aaa6fff19801d6747672f56e618d60002e7191ea92773a5bcae156"
 
 [[package]]
+name = "unty"
+version = "0.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d49784317cd0d1ee7ec5c716dd598ec5b4483ea832a2dced265471cc0f690ae"
+
+[[package]]
 name = "uptime"
 version = "0.1.0"
 dependencies = [
@@ -1824,6 +2030,18 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "virtue"
+version = "0.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "051eb1abcf10076295e815102942cc58f9d5e3b4560e46e53c21e8ff6f3af7b1"
+
+[[package]]
+name = "volatile"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6b06ad3ed06fef1713569d547cdbdb439eafed76341820fb0e0344f29a41945"
 
 [[package]]
 name = "volatile"
@@ -2106,7 +2324,7 @@ dependencies = [
  "bit_field",
  "bitflags 2.9.1",
  "rustversion",
- "volatile",
+ "volatile 0.4.6",
 ]
 
 [[package]]
@@ -2118,7 +2336,7 @@ dependencies = [
  "bit_field",
  "bitflags 2.9.1",
  "rustversion",
- "volatile",
+ "volatile 0.4.6",
 ]
 
 [[package]]
@@ -2147,11 +2365,32 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d497797928c195a67ad29428cc6db3bb3b38fa2d520be13637bde0ceb91c696"
+dependencies = [
+ "byteorder",
+ "zerocopy-derive 0.3.2",
+]
+
+[[package]]
+name = "zerocopy"
 version = "0.8.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1702d9583232ddb9174e01bb7c15a2ab8fb1bc6f227aa1233858c351a3ba0cb"
 dependencies = [
- "zerocopy-derive",
+ "zerocopy-derive 0.8.25",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6505e6815af7de1746a08f69c69606bb45695a17149517680f3b2149713b19a3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
