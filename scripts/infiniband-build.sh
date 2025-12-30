@@ -6,8 +6,6 @@ readonly BOOTLOADER_DIRECTORY="$(pwd)/loader"
 readonly PROFILE_DIRECTORY="${BOOTLOADER_DIRECTORY}/profile"
 readonly LINKER="ld"
 readonly TOWBOOT_TARGET="$(pwd)/d3os.img"
-readonly HOST_IB3="ib3"
-readonly HOST_IB4="ib4"
 readonly INFINIBAND_OP_READ="read"
 readonly INFINIBAND_OP_WRITE="write"
 readonly INFINIBAND_OP_STAT="stat"
@@ -40,7 +38,7 @@ function bench {
       --env IB_PROFILE="${current_profile}" --env CARGO_INFINIBAND_FEATURE="${FEATURE}" --env BOOTLOADER_DIRECTORY="${BOOTLOADER_DIRECTORY}" \
       --env LINKER="${LINKER}" --env HOST_MACHINE="${HOST}" --env SOURCE_IP="${SOURCE_IP}" \
       --env TARGET_IP="${TARGET_IP}" --env GATEWAY_IP="${GW_IP}" --env CARGO_ROOT_DIR="${CARGO_ROOT_DIR}" bench
-  
+
   cargo make --cwd os/application/rdma/mlx4 --no-workspace \
       --env IB_PROFILE="${current_profile}" --env CARGO_INFINIBAND_OPERATION="${OP}" --env BENCH_OPERATION="${BENCH_OP}" --env BOOTLOADER_DIRECTORY="${BOOTLOADER_DIRECTORY}" \
       --env LINKER="${LINKER}" --env HOST_MACHINE="${HOST}" --env SOURCE_IP="${SOURCE_IP}" \
@@ -84,7 +82,7 @@ function test {
       --env IB_PROFILE="${current_profile}" --env CARGO_INFINIBAND_FEATURE="${FEATURE}" --env BOOTLOADER_DIRECTORY="${BOOTLOADER_DIRECTORY}" \
       --env LINKER="${LINKER}" --env HOST_MACHINE="${HOST}" --env SOURCE_IP="${SOURCE_IP}" \
       --env TARGET_IP="${TARGET_IP}" --env GATEWAY_IP="${GW_IP}" --env CARGO_ROOT_DIR="${CARGO_ROOT_DIR}" test
-  
+
   cargo make --cwd os/application/rdma/mlx4 --no-workspace \
       --env IB_PROFILE="${current_profile}" --env CARGO_INFINIBAND_OPERATION="${OP}" --env BOOTLOADER_DIRECTORY="${BOOTLOADER_DIRECTORY}" \
       --env LINKER="${LINKER}" --env HOST_MACHINE="${HOST}" --env SOURCE_IP="${SOURCE_IP}" \
@@ -106,7 +104,7 @@ function test {
 
 function build {
   local FEATURE="$1"
-  
+
 	cargo make --no-workspace \
         --env CARGO_INFINIBAND_FEATURE="$FEATURE" image
 }
@@ -128,7 +126,7 @@ run () {
 
   printf "$PROCEDURE"
 
-  if declare -f "$PROCEDURE" > /dev/null; then 
+  if declare -f "$PROCEDURE" > /dev/null; then
     "$PROCEDURE" "$FEATURE" "$OP" "$HOST" "$SOURCE_IP" "$TARGET_IP" "$TARGET_PORT" "$IS_SENDER" "$GW_IP" "$BENCH_OP"
   else
     echo "Unknown command: $PROCEDURE"
@@ -197,18 +195,7 @@ while getopts "d:o:h:s:t:rg:p:b:" opt; do
       esac
       ;;
     h)
-      case "${OPTARG}" in
-        ib3)
-          HOST_NAME="$HOST_IB3"
-          ;;
-        ib4)
-          HOST_NAME="$HOST_IB4"
-          ;;
-        *)
-          echo "Unsupported host: ${OPTARG}" >&2
-          exit 1
-          ;;
-      esac
+      HOST_NAME="${OPTARG}"
       ;;
     s)
       SOURCE_IP="${OPTARG}" # assuming a valid ip
