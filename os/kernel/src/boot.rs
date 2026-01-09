@@ -32,9 +32,6 @@ use crate::{built_info, memory, naming, network, storage, infiniband};
 #[cfg(any(kernel_test, kernel_bench))]
 use crate::{init_test_runner, run_tests}; */
 
-#[cfg(any(kernel_test, kernel_bench))]
-use crate::build_constants;
-use crate::calibrate;
 use alloc::format;
 use alloc::string::ToString;
 use alloc::sync::Arc;
@@ -121,8 +118,8 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     unsafe {
         allocator().init(&heap_region);
     }
-    info!("kernel image region: [Start: {:#x}, End: {:#x}]", 
-        kernel_image_region.start.start_address().as_u64(), 
+    info!("kernel image region: [Start: {:#x}, End: {:#x}]",
+        kernel_image_region.start.start_address().as_u64(),
         kernel_image_region.end.start_address().as_u64(),
     );
     info!(
@@ -141,13 +138,6 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     dram::alloc(consts::KERNEL_HEAP_PAGES as u64).expect("Failed to allocate kernel heap frames!");
     dram::dump();
     debug!("Old page frame allocator:\n{}", memory::frames::dump());
-    #[cfg(any(kernel_test, kernel_bench))]
-    {
-        info!("Running D3OS in test mode!");
-        info!("This Host => {} ({})\nTarget Host => {} ({})\n",
-                build_constants::THIS_HOST, build_constants::THIS_IP,
-                build_constants::TARGET_HOST, build_constants::TARGET_IP);
-    }
 
     /*
         Hier den neuen Frame-Allocator aktivieren + Device Memory separat verwalten
@@ -158,7 +148,7 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     dram::dump();
     debug!("Old page frame allocator:\n{}", memory::frames::dump());
 
-    
+
     // Initialize CPU information
     init_cpu_info();
 
@@ -181,7 +171,7 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
         .expect("Unknown framebuffer type!");
     let fb_start_phys_addr = fb_info.address();
     let fb_end_phys_addr = fb_start_phys_addr + (fb_info.height() * fb_info.pitch()) as u64;
-    
+
     sys_vmem::init_fb_info(&fb_info);
 
     kernel_process.virtual_address_space.kernel_map_devm_identity(
@@ -312,7 +302,6 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     /*#[cfg(any(kernel_test, kernel_bench))]
     init_test_runner(); */
 
-    calibrate(50);
     infiniband::init();
 
     /*#[cfg(any(kernel_test, kernel_bench))]

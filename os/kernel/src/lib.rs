@@ -87,14 +87,11 @@ pub mod built_info {
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
 
-#[cfg(any(kernel_test, kernel_bench))]
-pub mod build_constants;
-
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     // make sure we never exit
     interrupts::disable();
-    
+
     // write the panic directly out to the serial port
     // this needs no allocations, no locks and should always work
     error!("Panic:");
@@ -107,7 +104,7 @@ fn panic(info: &PanicInfo) -> ! {
         .build();
 
     logger().log(&record);
-        
+
     // if we do have a terminal, try to print the error there, too
     let lfb_info = BUFFERED_LFB.get().map(|lfb| {
         unsafe { lfb.force_unlock() };
@@ -477,7 +474,7 @@ pub fn buffered_lfb() -> &'static Mutex<BufferedLFB> {
 
 /// Framebuffer information
 /// Remembered from boot, to be able to map to User-Space
-/// 
+///
 /// Author: Sebastian Keller
 static LFB_INFO: Once<LfbInfo> = Once::new();
 
@@ -499,7 +496,7 @@ pub fn lfb_info() -> &'static LfbInfo {
 
 /// System information
 /// Remembered from boot, to be able to expose to User-Space
-/// 
+///
 /// Author: Sebastian Keller
 pub struct BootInfo {
     pub bootloader_name: String,
@@ -519,7 +516,7 @@ pub fn boot_info() -> &'static BootInfo {
 static CYCLES_PER_US: Once<u64> = Once::new();
 
 // assuming pit is set to 1ms for simplicity
-// assuming feature on cpu is supported 
+// assuming feature on cpu is supported
 pub fn calibrate(wait_ticks: usize) {
 
     CYCLES_PER_US.call_once(|| {
@@ -533,7 +530,7 @@ pub fn calibrate(wait_ticks: usize) {
 
         // Convert PIT ticks to microseconds (assuming 1 tick = 1 ms)
         let elapsed_us = wait_ticks * 1000;
-        elapsed_cycles / (elapsed_us as u64) 
+        elapsed_cycles / (elapsed_us as u64)
     });
 }
 
