@@ -68,6 +68,7 @@ fn next_minor() -> usize {
     MINOR.fetch_add(1, Relaxed)
 }
 
+/// List of all initialized ConnectX-3 NICs
 pub fn get_dev_list() -> &'static Mutex<Vec<ConnectX3Nic>> {
     DEV_LIST.call_once(|| Mutex::new(Vec::with_capacity(devices_supported())))
 }
@@ -94,6 +95,7 @@ pub struct ConnectX3Nic {
 /// Functions that setup the struct.
 impl ConnectX3Nic {
     /// Initializes the ConnectX-3 card that is connected as the given PciDevice.
+    /// Adds the device to the global List of ConnectX-3 NICs
     ///
     /// # Arguments
     /// * `mlx3_pci_dev`: Contains the pci device information.
@@ -103,21 +105,18 @@ impl ConnectX3Nic {
         }
 
         let config_space = pci_bus().config_space();
-        // set the memory space bit for this PciDevice
-        // set the bus mastering bit for this PciDevice, which allows it to use DMA
-
         let mut mlx3_pci_dev = mlx3_pci_dev.write();
 
+        // set the memory space bit for this PciDevice
+        // set the bus mastering bit for this PciDevice, which allows it to use DMA
         mlx3_pci_dev.update_command(config_space, |creg| creg | CommandRegister::MEMORY_ENABLE | CommandRegister::BUS_MASTER_ENABLE);
 
         // map the Global Device Configuration registers
         let mut config_regs = utils::pci_map_bar_mem(&mlx3_pci_dev, 0, config_space)?;
-
         trace!("mlx3 configuration registers: {:?}", config_regs);
+
         // map the User Access Region
-
         let user_access_region = utils::pci_map_bar_mem(&mlx3_pci_dev, 2, &config_space)?;
-
         trace!("mlx3 user access region: {:?}", user_access_region);
 
         ResetRegisters::reset(&mlx3_pci_dev, &mut config_regs)?;
@@ -153,7 +152,9 @@ impl ConnectX3Nic {
         firmware_area.run(&mut command_interface)?;
         nic.capabilities = Some(firmware_area.repeat_query_capabilities(&mut command_interface)?);
         let caps = nic.capabilities.as_ref().unwrap();
+
         // In the Nautilus driver, some of the port setup already happens here.
+
         nic.offsets = Some(Offsets::init(caps));
         let offsets = nic.offsets.as_mut().unwrap();
         let mut profile = Profile::new(caps)?;
@@ -162,21 +163,23 @@ impl ConnectX3Nic {
         nic.icm_tables = Some(icm_aux_area.map_icm_tables(&mut command_interface, &profile, caps)?);
         nic.hca = Some(profile.init_hca.init_hca(&mut command_interface)?);
         let hca = nic.hca.as_ref().unwrap();
+
         // give us the interrupt pin
         hca.query_adapter(&mut command_interface)?;
         let memory_regions = nic.icm_tables.as_mut().unwrap().memory_regions();
+
         // get the doorbells and the BlueFlame section
         (nic.doorbells, nic.blueflame) = caps.get_doorbells_and_blueflame(user_access_region)?;
         nic.eqs = init_eqs(&mut command_interface, &mut nic.doorbells, caps, offsets, memory_regions)?;
+
         // In the Nautilus driver, CQs and QPs are already allocated here.
+
         hca.config_mad_demux(&mut command_interface, &caps)?;
         nic.ports = hca.init_ports(&mut command_interface, &caps)?;
 
         let minor = next_minor();
-
         nic.minor = minor;
         get_dev_list().lock().push(nic);
-
         Ok(minor)
     }
 
