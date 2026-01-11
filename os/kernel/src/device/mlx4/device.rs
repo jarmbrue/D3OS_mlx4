@@ -1,12 +1,12 @@
 //! This module consists of functions that work close to the hardware of the hca.
 use byteorder::BigEndian;
 
-use pci_types::{EndpointHeader};
-use volatile::{ReadOnly, WriteOnly};
-use zerocopy::{U32};
-use log::trace;
-use crate::{scheduler, pci_bus};
 use super::utils::MappedPages;
+use crate::{pci_bus, scheduler};
+use log::trace;
+use pci_types::EndpointHeader;
+use volatile::{ReadOnly, WriteOnly};
+use zerocopy::U32;
 
 const RESET_BASE: usize = 0xf0000;
 const OWNER_BASE: usize = 0x8069c;
@@ -55,7 +55,7 @@ impl ResetRegisters {
             // wait for it to respond to PCI cycles
 
             if mlx3_pci_dev.header().id(config_space).0 != 0xffff {
-                return Ok(())
+                return Ok(());
             }
             trace!("waiting for card...");
             scheduler().sleep(1);

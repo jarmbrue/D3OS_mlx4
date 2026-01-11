@@ -4,15 +4,25 @@ use strum_macros::{Display, EnumCount, FromRepr};
 use super::fw::InitHcaParameters;
 
 use super::fw::Capabilities;
-use log::trace;
 use crate::memory::PAGE_SIZE;
+use log::trace;
 
 #[repr(usize)]
 #[derive(Default, Display, EnumCount, FromRepr, Clone, Copy)]
 enum ResourceType {
-    #[default] QP, RDMARC, ALTC, AUXC, SRQ, CQ, EQ, DMPT, CMPT, MTT, MCG,
+    #[default]
+    QP,
+    RDMARC,
+    ALTC,
+    AUXC,
+    SRQ,
+    CQ,
+    EQ,
+    DMPT,
+    CMPT,
+    MTT,
+    MCG,
 }
-
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
@@ -42,7 +52,10 @@ const MAX_NUM_EQS: u64 = 1 << 9;
 #[derive(EnumCount)]
 #[allow(dead_code)]
 enum CmptType {
-    QP, SRQ, CQ, EQ,
+    QP,
+    SRQ,
+    CQ,
+    EQ,
 }
 
 /// This struct contains parameters that are needed to map the ICM tables,
@@ -126,7 +139,11 @@ impl Profile {
             if profile.size > 0 {
                 trace!(
                     " resource[{:02}] ({:>6}): 2^{:02} entries @ {:#010x} size {} KB",
-                    idx, profile.typ, profile.lognum(), profile.start, profile.size >> 10,
+                    idx,
+                    profile.typ,
+                    profile.lognum(),
+                    profile.start,
+                    profile.size >> 10,
                 );
             }
         }
@@ -138,25 +155,25 @@ impl Profile {
                 ResourceType::CQ => {
                     init_hca.set_qpc_cqc_base(profile.start);
                     init_hca.set_qpc_log_cq(profile.lognum().try_into().unwrap());
-                },
+                }
                 ResourceType::SRQ => {
                     init_hca.set_qpc_srqc_base(profile.start);
                     init_hca.set_qpc_log_srq(profile.lognum().try_into().unwrap());
-                },
+                }
                 ResourceType::QP => {
                     init_hca.set_qpc_base(profile.start);
                     init_hca.set_qpc_log_qp(profile.lognum().try_into().unwrap());
-                },
+                }
                 ResourceType::ALTC => init_hca.set_qpc_altc_base(profile.start),
                 ResourceType::AUXC => init_hca.set_qpc_auxc_base(profile.start),
                 ResourceType::MTT => {
                     num_mtts = profile.num.try_into().unwrap();
                     init_hca.set_tpt_mtt_base(profile.start);
-                },
+                }
                 ResourceType::EQ => {
                     init_hca.set_qpc_eqc_base(profile.start);
                     init_hca.set_qpc_log_eq(MAX_NUM_EQS.ilog2().try_into().unwrap());
-                },
+                }
                 ResourceType::RDMARC => {
                     // TODO: this should be possible without a loop
                     while DEFAULT_NUM_QP << rdmarc_shift < profile.num {
@@ -165,12 +182,12 @@ impl Profile {
                         init_hca.set_qpc_log_rd(rdmarc_shift);
                         rdmarc_shift += 1;
                     }
-                },
+                }
                 ResourceType::DMPT => {
                     num_mpts = profile.num.try_into().unwrap();
                     init_hca.set_tpt_dmpt_base(profile.start);
                     init_hca.set_tpt_log_dmpt_sz(profile.lognum().try_into().unwrap());
-                },
+                }
                 ResourceType::MCG => {
                     init_hca.set_mc_base(profile.start);
                     init_hca.set_mc_log_entry_sz(get_mgm_entry_size().ilog2().try_into().unwrap());
@@ -178,15 +195,20 @@ impl Profile {
                     init_hca.set_mc_log_hash_sz((profile.lognum() - 1).try_into().unwrap());
                     num_mgms = (profile.num >> 1).try_into().unwrap();
                     num_amgms = (profile.num >> 1).try_into().unwrap();
-                },
+                }
             }
         }
         trace!("Max ICM size: {} GB", caps.max_icm_sz() >> 30);
         trace!("ICM memory reserving {} GB", total_size >> 30);
         trace!("HCA Pages Required: {}", total_size >> 12);
         Ok(Self {
-            num_mpts, num_mgms, num_amgms, num_mtts,
-            _max_qp_dest_rdma: max_qp_dest_rdma, rdmarc_shift, init_hca,
+            num_mpts,
+            num_mgms,
+            num_amgms,
+            num_mtts,
+            _max_qp_dest_rdma: max_qp_dest_rdma,
+            rdmarc_shift,
+            init_hca,
             total_size,
         })
     }

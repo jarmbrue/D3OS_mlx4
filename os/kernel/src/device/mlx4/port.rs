@@ -1,11 +1,18 @@
-use core::{fmt::{self, Debug}, mem::size_of};
 use byteorder::BigEndian;
-use modular_bitfield_msb::{bitfield, prelude::{B11, B28, B3, B5, B60, B84}, specifiers::{B2, B4, B48, B9}};
+use core::{
+    fmt::{self, Debug},
+    mem::size_of,
+};
+use modular_bitfield_msb::{
+    bitfield,
+    prelude::{B11, B28, B3, B5, B60, B84},
+    specifiers::{B2, B4, B48, B9},
+};
 use rdma::{ibv_mtu, ibv_port_attr, ibv_port_state, PhysicalPortState};
 use zerocopy::{AsBytes, FromBytes, U16, U32, U64};
 
-use super::utils::MappedPages;
 use super::cmd::{CommandInterface, MadIfcOpcodeModifier, Opcode, SetPortOpcodeModifier};
+use super::utils::MappedPages;
 use log::{trace, warn};
 
 #[derive(Debug)]
@@ -17,14 +24,14 @@ pub struct Port {
 }
 
 impl Port {
-    pub(super) fn new(
-        cmd: &mut CommandInterface, number: u8, mtu: ibv_mtu,
-        pkey_table_size: Option<u16>,
-    ) -> Result<Self, &'static str> {
+    pub(super) fn new(cmd: &mut CommandInterface, number: u8, mtu: ibv_mtu, pkey_table_size: Option<u16>) -> Result<Self, &'static str> {
         trace!("initializing port {number}...");
         // create the struct
         let mut port = Self {
-            number, open: false, capabilities: None, madifc_output: None,
+            number,
+            open: false,
+            capabilities: None,
+            madifc_output: None,
         };
         // then, get all port capabilities
         let port_attr = port.query(cmd)?;
@@ -40,17 +47,14 @@ impl Port {
         set_port_input.set_mtu_cap(mtu as u8);
         for vl_cap_shift in (0..=3).rev() {
             set_port_input.set_vl_cap(1 << vl_cap_shift);
-            let _ : () = cmd.execute_command(
-                Opcode::SetPort, SetPortOpcodeModifier::IB,
-                &set_port_input.bytes[..], number.into(),
-            )?;
+            let _: () = cmd.execute_command(Opcode::SetPort, SetPortOpcodeModifier::IB, &set_port_input.bytes[..], number.into())?;
         }
 
         // get the current state
         port.query(cmd)?;
 
         // finally, bring the port up
-        let _ : () = cmd.execute_command(Opcode::InitPort, (), (), number.into())?;
+        let _: () = cmd.execute_command(Opcode::InitPort, (), (), number.into())?;
         // and update the state again
         port.query(cmd)?;
         trace!("initialized {port:?}");
@@ -60,20 +64,16 @@ impl Port {
         Ok(port)
     }
 
-    pub(super) fn close(
-        mut self, cmd: &mut CommandInterface,
-    ) -> Result<(), &'static str> {
-        let _ : () = cmd.execute_command(Opcode::ClosePort, (), (), self.number.into())?;
+    pub(super) fn close(mut self, cmd: &mut CommandInterface) -> Result<(), &'static str> {
+        let _: () = cmd.execute_command(Opcode::ClosePort, (), (), self.number.into())?;
         self.open = false;
         Ok(())
     }
-    
+
     /// Query the port capabilities, configuration and current settings.
-    /// 
+    ///
     /// This is called by ibv_query_port.
-    pub(super) fn query(
-        &mut self, cmd: &mut CommandInterface,
-    ) -> Result<ibv_port_attr, &'static str> {
+    pub(super) fn query(&mut self, cmd: &mut CommandInterface) -> Result<ibv_port_attr, &'static str> {
         // Querying the port might fail, so try this a few times.
         let mut attr = None;
         let mut err = None;
@@ -82,29 +82,22 @@ impl Port {
                 Ok(a) => {
                     attr = Some(a);
                     break;
-                },
+                }
                 Err(e) => {
                     warn!("querying the port failed with: {e:?}");
                     err = Some(e);
-                },
+                }
             }
         }
         attr.ok_or_else(|| err.unwrap())
     }
 
     /// Actually query the port.
-    fn query_single(
-        &mut self, cmd: &mut CommandInterface,
-    ) -> Result<ibv_port_attr, &'static str> {
+    fn query_single(&mut self, cmd: &mut CommandInterface) -> Result<ibv_port_attr, &'static str> {
         // QUERY_PORT gives us some details
-        let page: MappedPages = cmd.execute_command(
-            Opcode::QueryPort, (), (), self.number.into(),
-        )?;
+        let page: MappedPages = cmd.execute_command(Opcode::QueryPort, (), (), self.number.into())?;
         self.capabilities = Some(PortCapabilities::from_bytes(
-            page
-                .as_slice(0, size_of::<PortCapabilities>())?
-                .try_into()
-                .unwrap()
+            page.as_slice(0, size_of::<PortCapabilities>())?.try_into().unwrap(),
         ));
 
         // MAD_IFC gives us even more
@@ -121,35 +114,20 @@ impl Port {
         madifc_input.method = MGMT_METHOD_GET;
         madifc_input.attr_id = SMP_ATTR_PORT_INFO.into();
         madifc_input.attr_mod = u32::from(self.number).into();
-        let madifc_output_page: MappedPages = cmd.execute_command(
-            Opcode::MadIfc, madifc_modifier, madifc_input.as_bytes(),
-            self.number.into(),
-        )?;
-        self.madifc_output = Some(
-            madifc_output_page.as_type::<MadPacket>(0)?.clone()
-        );
-        let madifc_output_data = MadPacketData::from_bytes(
-            self.madifc_output.as_ref().unwrap().data
-        );
+        let madifc_output_page: MappedPages = cmd.execute_command(Opcode::MadIfc, madifc_modifier, madifc_input.as_bytes(), self.number.into())?;
+        self.madifc_output = Some(madifc_output_page.as_type::<MadPacket>(0)?.clone());
+        let madifc_output_data = MadPacketData::from_bytes(self.madifc_output.as_ref().unwrap().data);
 
         // finally, format it nicely for the application
         Ok(ibv_port_attr {
-            state: ibv_port_state::from_repr(
-                madifc_output_data.state().into()
-            ).ok_or("invalid state")?,
-            max_mtu: ibv_mtu::from_repr(
-                madifc_output_data.max_mtu().into()
-            ).ok_or("invalid max MTU")?,
-            active_mtu: ibv_mtu::from_repr(
-                madifc_output_data.active_mtu()
-            ).ok_or("invalid MTU")?,
+            state: ibv_port_state::from_repr(madifc_output_data.state().into()).ok_or("invalid state")?,
+            max_mtu: ibv_mtu::from_repr(madifc_output_data.max_mtu().into()).ok_or("invalid max MTU")?,
+            active_mtu: ibv_mtu::from_repr(madifc_output_data.active_mtu()).ok_or("invalid MTU")?,
             port_cap_flags: madifc_output_data.port_cap_flags(),
             lid: madifc_output_data.lid(),
             sm_lid: madifc_output_data.sm_lid(),
             lmc: madifc_output_data.lmc(),
-            phys_state: PhysicalPortState::from_repr(
-                madifc_output_data.phys_state()
-            ).ok_or("invalid physical port state")?,
+            phys_state: PhysicalPortState::from_repr(madifc_output_data.phys_state()).ok_or("invalid physical port state")?,
             link_layer: 0, // TODO
         })
     }
@@ -165,57 +143,94 @@ impl Drop for Port {
 
 #[bitfield]
 struct SetPortCommand {
-    #[skip] __: B9,
-    #[skip(getters)] change_port_mtu: bool,
-    #[skip(getters)] change_port_vl: bool,
-    #[skip(getters)] change_port_pkey: bool,
-    #[skip] __: B4,
-    #[skip(getters)] mtu_cap: B4,
-    #[skip] __: B4,
-    #[skip(getters)] vl_cap: B4,
-    #[skip] __: B4,
-    #[skip(getters)] capabilities: u32,
-    #[skip] __: u64,
-    #[skip] __: u64,
-    #[skip] __: u64,
-    #[skip] __: u32,
-    #[skip] __: u32,
-    #[skip(getters)] max_pkey: u16,
+    #[skip]
+    __: B9,
+    #[skip(getters)]
+    change_port_mtu: bool,
+    #[skip(getters)]
+    change_port_vl: bool,
+    #[skip(getters)]
+    change_port_pkey: bool,
+    #[skip]
+    __: B4,
+    #[skip(getters)]
+    mtu_cap: B4,
+    #[skip]
+    __: B4,
+    #[skip(getters)]
+    vl_cap: B4,
+    #[skip]
+    __: B4,
+    #[skip(getters)]
+    capabilities: u32,
+    #[skip]
+    __: u64,
+    #[skip]
+    __: u64,
+    #[skip]
+    __: u64,
+    #[skip]
+    __: u32,
+    #[skip]
+    __: u32,
+    #[skip(getters)]
+    max_pkey: u16,
     // ...
 }
 
 #[bitfield]
 struct PortCapabilities {
-    #[skip(setters)] link_up: bool,
+    #[skip(setters)]
+    link_up: bool,
     // dmfs_optimized_state
-    #[skip] __: B2,
-    #[skip] default_sense: bool,
-    #[skip] default_type: bool,
-    #[skip] __: bool,
-    #[skip(setters)] eth: bool,
-    #[skip(setters)] ib: bool,
-    #[skip] __: B4,
-    #[skip(setters)] ib_mtu: B4,
-    #[skip(setters)] eth_mtu: u16,
-    #[skip] ib_link_speed: u8,
-    #[skip] eth_link_speed: u8,
-    #[skip] ib_port_width: u8,
-    #[skip] log_max_gids: B4,
-    #[skip] log_max_pkeys: B4,
-    #[skip] __: u16,
-    #[skip] log_max_vlan: B4,
-    #[skip] log_max_mac: B4,
-    #[skip] max_tc_eth: B4,
-    #[skip] max_vl_ib: B4,
-    #[skip] __: B48,
-    #[skip(setters)] mac: B48,
+    #[skip]
+    __: B2,
+    #[skip]
+    default_sense: bool,
+    #[skip]
+    default_type: bool,
+    #[skip]
+    __: bool,
+    #[skip(setters)]
+    eth: bool,
+    #[skip(setters)]
+    ib: bool,
+    #[skip]
+    __: B4,
+    #[skip(setters)]
+    ib_mtu: B4,
+    #[skip(setters)]
+    eth_mtu: u16,
+    #[skip]
+    ib_link_speed: u8,
+    #[skip]
+    eth_link_speed: u8,
+    #[skip]
+    ib_port_width: u8,
+    #[skip]
+    log_max_gids: B4,
+    #[skip]
+    log_max_pkeys: B4,
+    #[skip]
+    __: u16,
+    #[skip]
+    log_max_vlan: B4,
+    #[skip]
+    log_max_mac: B4,
+    #[skip]
+    max_tc_eth: B4,
+    #[skip]
+    max_vl_ib: B4,
+    #[skip]
+    __: B48,
+    #[skip(setters)]
+    mac: B48,
     // ...
 }
 
 impl Debug for PortCapabilities {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f
-            .debug_struct("PortCapabilities")
+        f.debug_struct("PortCapabilities")
             .field("IB supported", &self.ib())
             .field("Ethernet supported", &self.eth())
             .field("Link", &self.link_up())
@@ -254,39 +269,64 @@ struct MadPacket {
 
 impl fmt::Debug for MadPacket {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f
-            .debug_struct("MadPacket")
-            .finish_non_exhaustive()
+        f.debug_struct("MadPacket").finish_non_exhaustive()
     }
 }
 
 #[bitfield]
 struct MadPacketData {
-    #[skip] __: u128,
-    #[skip(setters)] lid: u16,
-    #[skip(setters)] sm_lid: u16,
-    #[skip(setters)] port_cap_flags: u32,
-    #[skip] __: B60,
-    #[skip] active_width: B4,
-    #[skip] __: B4,
-    #[skip(setters)] state: B4,
-    #[skip(setters)] phys_state: B4,
-    #[skip] __: B9,
-    #[skip(setters)] lmc: B3,
-    #[skip] active_speed: B4,
-    #[skip] __: B4,
-    #[skip(setters)] active_mtu: B4,
-    #[skip] __: B4,
-    #[skip] max_vl_num: B4,
-    #[skip] __: B28,
-    #[skip] init_type_reply: B4,
-    #[skip(setters)] max_mtu: B4,
-    #[skip] __: u32,
-    #[skip] bad_pkey_cntr: u16,
-    #[skip] qkey_viol_cnt: u16,
-    #[skip] __: B11,
-    #[skip] subnet_timeout: B5,
-    #[skip] __: B84,
-    #[skip] ext_active_speed: B4,
-    #[skip] __: u8,
+    #[skip]
+    __: u128,
+    #[skip(setters)]
+    lid: u16,
+    #[skip(setters)]
+    sm_lid: u16,
+    #[skip(setters)]
+    port_cap_flags: u32,
+    #[skip]
+    __: B60,
+    #[skip]
+    active_width: B4,
+    #[skip]
+    __: B4,
+    #[skip(setters)]
+    state: B4,
+    #[skip(setters)]
+    phys_state: B4,
+    #[skip]
+    __: B9,
+    #[skip(setters)]
+    lmc: B3,
+    #[skip]
+    active_speed: B4,
+    #[skip]
+    __: B4,
+    #[skip(setters)]
+    active_mtu: B4,
+    #[skip]
+    __: B4,
+    #[skip]
+    max_vl_num: B4,
+    #[skip]
+    __: B28,
+    #[skip]
+    init_type_reply: B4,
+    #[skip(setters)]
+    max_mtu: B4,
+    #[skip]
+    __: u32,
+    #[skip]
+    bad_pkey_cntr: u16,
+    #[skip]
+    qkey_viol_cnt: u16,
+    #[skip]
+    __: B11,
+    #[skip]
+    subnet_timeout: B5,
+    #[skip]
+    __: B84,
+    #[skip]
+    ext_active_speed: B4,
+    #[skip]
+    __: u8,
 }
