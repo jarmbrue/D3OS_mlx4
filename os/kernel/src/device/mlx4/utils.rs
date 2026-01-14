@@ -3,7 +3,7 @@ use x86_64::structures::paging::frame::PhysFrameRange;
 use x86_64::structures::paging::page::{Page, PageRange};
 use x86_64::structures::paging::{PageTableFlags, PhysFrame, Size4KiB};
 
-use crate::memory::{frames, vmm, PAGE_SIZE};
+use crate::memory::{vmm, PAGE_SIZE};
 use crate::process_manager;
 use x86_64::{PhysAddr, VirtAddr};
 

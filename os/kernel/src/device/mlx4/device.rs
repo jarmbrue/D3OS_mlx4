@@ -1,25 +1,24 @@
 //! This module consists of functions that work close to the hardware of the hca.
-use byteorder::BigEndian;
+use tock_registers::{interfaces::{Readable, Writeable}, register_structs, registers::{ReadOnly, WriteOnly}};
 
 use super::utils::MappedPages;
 use crate::{pci_bus, scheduler};
 use log::trace;
 use pci_types::EndpointHeader;
-use volatile::{ReadOnly, WriteOnly};
-use zerocopy::U32;
 
 const RESET_BASE: usize = 0xf0000;
 const OWNER_BASE: usize = 0x8069c;
 pub(super) const DEFAULT_UAR_PAGE_SHIFT: u8 = 12;
 pub(super) const PAGE_SHIFT: u8 = 12;
 
-//#[derive(FromBytes)]
-#[repr(C, packed)]
-pub(super) struct ResetRegisters {
-    _padding: [u8; 0x10],
-    reset: WriteOnly<U32<BigEndian>>,
-    _padding2: [u8; 0x3e8],
-    semaphore: ReadOnly<U32<BigEndian>>,
+register_structs! {
+    pub ResetRegisters {
+        (0x0 => _reserved),
+        (0x10 => reset: WriteOnly<u32>),
+        (0x14 => _reserved2),
+        (0x3fc => semaphore: ReadOnly<u32>),
+        (0x400 => @END),
+    }
 }
 
 impl ResetRegisters {
@@ -35,7 +34,7 @@ impl ResetRegisters {
         // grab HW semaphore to lock out flash updates
         let mut sem = 1;
         for _ in 0..1000 {
-            sem = reset_registers.semaphore.read().get();
+            sem = reset_registers.semaphore.get().swap_bytes();
             if sem == 0 {
                 break;
             }
@@ -47,7 +46,7 @@ impl ResetRegisters {
         }
 
         // actually hit reset
-        reset_registers.reset.write(1.into());
+        reset_registers.reset.set(1_u32.swap_bytes());
         // docs say to wait one second before accessing device
         scheduler().sleep(1000);
 
@@ -67,13 +66,13 @@ impl ResetRegisters {
 //#[derive(FromBytes)]
 #[repr(transparent)]
 pub(super) struct Ownership {
-    value: ReadOnly<U32<BigEndian>>,
+    value: ReadOnly<u32>,
 }
 
 impl Ownership {
     pub(super) fn get(config_regs: &MappedPages) -> Result<(), &'static str> {
         let ownership: &Ownership = config_regs.as_type(OWNER_BASE)?;
-        if ownership.value.read().get() == 0 {
+        if ownership.value.get().swap_bytes() == 0 {
             Ok(())
         } else {
             Err("We don't have card ownership")

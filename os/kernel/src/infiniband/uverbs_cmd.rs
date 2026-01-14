@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use rdma::uverbs_uapi::{ibv_cq_container, ibv_mr_res, ibv_qp_container, ibv_qp_modify_container, ibv_qp_post_recv_container, ibv_qp_post_send_container};
 use rdma::{ibv_access_flags, ibv_device_attr, ibv_port_attr, ibv_wc};
-use spin::{Mutex, MutexGuard};
+use spin::{MutexGuard};
 
 use crate::device::mlx4::{devices_supported, get_dev_list, minor_to_idx, ConnectX3Nic};
 

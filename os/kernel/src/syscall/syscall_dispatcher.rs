@@ -21,7 +21,6 @@ use crate::syscall::sys_concurrent::{sys_process_execute_binary, sys_process_exi
     sys_thread_id, sys_thread_join, sys_thread_sleep, sys_thread_switch};
 use crate::syscall::sys_uverbs::sys_uverbs_ctl;
 use crate::syscall::sys_net::{sys_socket_bind, sys_socket, sys_socket_close, sys_socket_connect};
-use crate::syscall::sys_naming::*;
 
 use crate::{core_local_storage, tss};
 use log::info;
