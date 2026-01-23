@@ -23,18 +23,19 @@ register_structs! {
 
 impl ResetRegisters {
     pub(super) fn reset(mlx3_pci_dev: &EndpointHeader, config_regs: &mut MappedPages) -> Result<(), &'static str> {
+        // See ConnectX Programmer’s Reference Manual (RPM) Rev 2.1 / Appendix A ConnectX Software Reset
         let config_space = pci_bus().config_space();
         trace!("Initiating card reset for ConnectX-3...");
 
         // get the reset registers
         let reset_registers: &mut ResetRegisters = config_regs.as_type_mut(RESET_BASE)?;
 
-        // TODO: save config space
+        // TODO: save config space. See RPM/A2.1
 
         // grab HW semaphore to lock out flash updates
         let mut sem = 1;
         for _ in 0..1000 {
-            sem = reset_registers.semaphore.get().swap_bytes();
+            sem = u32::from_be(reset_registers.semaphore.get());
             if sem == 0 {
                 break;
             }
@@ -46,7 +47,8 @@ impl ResetRegisters {
         }
 
         // actually hit reset
-        reset_registers.reset.set(1_u32.swap_bytes());
+        reset_registers.reset.set(1_u32.to_be());
+
         // docs say to wait one second before accessing device
         scheduler().sleep(1000);
 
@@ -63,16 +65,15 @@ impl ResetRegisters {
     }
 }
 
-//#[derive(FromBytes)]
 #[repr(transparent)]
-pub(super) struct Ownership {
+pub struct Ownership {
     value: ReadOnly<u32>,
 }
 
 impl Ownership {
     pub(super) fn get(config_regs: &MappedPages) -> Result<(), &'static str> {
         let ownership: &Ownership = config_regs.as_type(OWNER_BASE)?;
-        if ownership.value.get().swap_bytes() == 0 {
+        if ownership.value.get().to_be() == 0 {
             Ok(())
         } else {
             Err("We don't have card ownership")

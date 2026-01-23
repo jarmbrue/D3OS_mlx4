@@ -4,7 +4,7 @@
 
 use core::{
     mem::size_of,
-    sync::atomic::{compiler_fence, Ordering},
+    sync::atomic::{compiler_fence, Ordering}, u32,
 };
 
 use crate::device::mlx4::utils::FillOperation;
@@ -23,7 +23,7 @@ use rdma::{
     ibv_sge, ibv_wr_opcode,
 };
 use strum_macros::FromRepr;
-use volatile::WriteOnly;
+use tock_registers::{interfaces::Writeable, registers::WriteOnly};
 use x86_64::{PhysAddr, VirtAddr};
 use zerocopy::{AsBytes, FromBytes, U16, U32, U64};
 
@@ -104,7 +104,7 @@ impl QueuePair {
         let (mut doorbell_page, doorbell_address) =
             utils::create_cont_mapping_with_dma_flags(utils::pages_required(size_of::<QueuePairDoorbell>()))?.fetch_in_addr()?;
         let doorbell: &mut QueuePairDoorbell = doorbell_page.as_type_mut(0)?;
-        doorbell.receive_wqe_index.write(0.into());
+        doorbell.receive_wqe_index.set(0_u32.to_be());
         let qp = Self {
             number,
             state,
@@ -469,8 +469,8 @@ impl QueuePair {
         // make sure that the descriptors are written before the doorbell
         compiler_fence(Ordering::SeqCst);
         let doorbell: &mut QueuePairDoorbell = self.doorbell_page.as_type_mut(0)?;
-        doorbell.receive_wqe_index.write(
-            (self.rq.head as u16).into(), // wrap around at u16::MAX
+        doorbell.receive_wqe_index.set(
+            (self.rq.head as u16 as u32).to_be(), // wrap around at u16::MAX
         );
         Ok(())
     }
@@ -620,7 +620,7 @@ impl QueuePair {
             // Make sure that descriptors are written before doorbell.
             compiler_fence(Ordering::SeqCst);
             let doorbell: &mut DoorbellPage = doorbells[self.uar_idx].as_type_mut(0)?;
-            doorbell.send_queue_number.write((self.number << 8).into());
+            doorbell.send_queue_number.set((self.number << 8).to_be());
         }
         self.sq.stamp_wqe(memory, index + self.sq.spare_wqes.unwrap() - 1)?;
         self.sq.head = self.sq.head.wrapping_add(num_req);
@@ -692,11 +692,9 @@ impl Drop for QueuePair {
     }
 }
 
-//#[derive(FromBytes)]
-#[repr(C, packed)]
+#[repr(transparent)]
 struct QueuePairDoorbell {
-    _reserved: u16,
-    receive_wqe_index: WriteOnly<U16<BigEndian>>,
+    receive_wqe_index: WriteOnly<u32>,
 }
 
 type WorkQueueMeta<U, T> = (U, T);

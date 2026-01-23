@@ -5,16 +5,16 @@ use core::mem::size_of;
 use crate::memory::PAGE_SIZE;
 use alloc::{format, string::String, vec::Vec};
 use byteorder::BigEndian;
+use tock_registers::{register_bitfields, register_structs, registers::WriteOnly};
 use core::fmt::Debug;
-use log::{trace, warn};
+use log::{debug, trace, warn};
 use modular_bitfield_msb::{
     bitfield,
     specifiers::{B1, B10, B104, B11, B12, B15, B2, B20, B22, B24, B25, B27, B3, B31, B36, B4, B42, B45, B5, B6, B63, B7, B72, B88, B91},
 };
 use rdma::ibv_mtu;
-use volatile::WriteOnly;
 use x86_64::structures::paging::{page::Page, Size4KiB};
-use zerocopy::{AsBytes, FromBytes, U16, U32, U64};
+use zerocopy::{AsBytes, FromBytes, U16, U64};
 
 use super::{
     cmd::{CommandInterface, MadDemuxOpcodeModifier, Opcode},
@@ -46,7 +46,7 @@ impl Firmware {
         let page: MappedPages = cmd.execute_command(Opcode::QueryFw, (), (), 0)?;
         let mut fw = page.as_type::<Firmware>(0)?.clone();
         fw.clr_int_bar = (fw.clr_int_bar >> 6) * 2;
-        trace!("got firmware info: {fw:?}");
+        debug!("got firmware info: {fw:?}");
         Ok(fw)
     }
 
@@ -776,37 +776,56 @@ impl core::fmt::Debug for Capabilities {
     }
 }
 
-//#[derive(FromBytes)]
-#[repr(C, packed)]
-pub(super) struct DoorbellEq {
-    pub(super) val: WriteOnly<U32<BigEndian>>,
-    _padding: u32,
+// TODO: define  DoorbellEq and DoorbellPage to register_structs!
+
+register_bitfields![u32,
+    pub SendQueueNumber [
+        NUM OFFSET(8) NUMBITS(24)
+    ],
+    pub CpSnCmdNum [
+        CPN OFFSET(0)  NUMBITS(24),
+        CMD OFFSET(24) NUMBITS(3),
+        SN  OFFSET(28) NUMBITS(2)
+    ],
+    pub CpConsumerIndex [
+        CP_CI OFFSET(0) NUMBITS(24),
+    ],
+    pub DoorbellEqField [
+        CI OFFSET(0)  NUMBITS(24),
+        A  OFFSET(31) NUMBITS(1)
+    ]
+];
+
+pub struct DoorbellEq  {
+    pub val: WriteOnly<u32, DoorbellEqField::Register>,
+    _reserved1: u32
 }
 
-//#[derive(FromBytes)]
-#[repr(C, packed)]
-pub(super) struct DoorbellPage {
-    _padding1: u128,
-    _padding2: u32,
-    pub(super) send_queue_number: WriteOnly<U32<BigEndian>>,
-    _padding3: u64,
+register_structs! {
+    pub DoorbellPage {
+    (0x000 => _reserved1),
+    (0x014 => pub send_queue_number: WriteOnly<u32, SendQueueNumber::Register>),
+    (0x018 => _reserved2),
 
     // CQ
     /// contains the sequence number, the command and the cq number
-    pub(super) cq_sn_cmd_num: WriteOnly<U32<BigEndian>>,
-    pub(super) cq_consumer_index: WriteOnly<U32<BigEndian>>,
+    (0x020 => pub cq_sn_cmd_num: WriteOnly<u32, CpSnCmdNum::Register>),
+    (0x024 => pub cq_consumer_index: WriteOnly<u32, CpConsumerIndex::Register>),
 
     // skip 502 u32
-    _padding4: [u32; 502],
+    (0x028 => _padding4),
 
     // EQ
     // for the EQ number n the relevant doorbell is in
     // DoorbellPage (n / 4) and eq (n % 4)
-    pub(super) eqs: [DoorbellEq; 4],
+    (0x800 => pub eqs: [DoorbellEq; 4]),
 
     // skip 503 u32
-    _padding9: [u32; 503],
+    (0x820 => _padding9),
+    (0x1000 => @END),
+    }
 }
+
 
 #[bitfield]
 pub(super) struct InitHcaParameters {

@@ -13,6 +13,7 @@ mod port;
 mod profile;
 mod queue_pair;
 mod utils;
+mod tock_register_utils;
 
 use alloc::vec::Vec;
 use cmd::CommandInterface;

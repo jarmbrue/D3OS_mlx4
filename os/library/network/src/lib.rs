@@ -71,7 +71,7 @@ impl UdpSocket {
                 errno => NetworkError::Unknown(errno),
             })
     }
-    
+
     pub fn recv_from(&self, data_buf: &mut [u8]) -> Result<(usize, SocketAddr), NetworkError> {
         let protocol = 0;
         // this should be the maximum length for an IP address

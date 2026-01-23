@@ -1,6 +1,6 @@
 #![no_std]
 
-use core::{ptr, slice};
+use core::slice;
 
 use bitflags::bitflags;
 use syscall::{return_vals::{Errno}, syscall, SystemCall};

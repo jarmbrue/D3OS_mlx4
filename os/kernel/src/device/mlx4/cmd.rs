@@ -1,6 +1,7 @@
 //! This module consists of functions to create a direct memory access mailbox for passing parameters to the hca
 //! and getting output back from the hca during verb calls and functions to execute verb calls.
 
+use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{compiler_fence, Ordering};
 
 use super::utils::{OperationArgs, Operations};
@@ -11,11 +12,10 @@ use crate::{
 };
 use alloc::boxed::Box;
 use bitflags::bitflags;
-use byteorder::BigEndian;
 use log::trace;
 use strum_macros::{FromRepr, IntoStaticStr};
-use volatile::{Volatile, WriteOnly};
-use zerocopy::{U32, U64};
+use tock_registers::interfaces::{Readable, Writeable};
+use tock_registers::register_bitfields;
 
 const HCR_BASE: usize = 0x80680;
 const HCR_OPMOD_SHIFT: u32 = 12;
@@ -157,17 +157,35 @@ pub(super) struct CommandInterface<'a> {
     exp_toggle: u32,
 }
 
-//#[derive(FromBytes)]
-#[repr(C, packed)]
+register_bitfields![u32,
+    StatusOpcode [
+        OPCODE     OFFSET(0)  NUMBITS(12) [],
+        OPCODE_MOD OFFSET(12) NUMBITS(4) [],
+        T          OFFSET(21) NUMBITS(1) [],
+        E          OFFSET(22) NUMBITS(1) [
+            NoReport = 0,
+            Report = 1
+        ],
+        GO         OFFSET(23) NUMBITS(1) [
+            SoftwareOwnership = 0,
+            HardwareOwnership = 1
+    ],
+        STATUS     OFFSET(24) NUMBITS(8) [],
+    ]
+];
+
+#[repr(C)]
 struct Hcr {
-    in_param: WriteOnly<U64<BigEndian>>,
-    in_mod: WriteOnly<U32<BigEndian>>,
-    out_param: Volatile<U64<BigEndian>>,
+    in_param_h: WriteOnly<u32>,
+    in_param_l: WriteOnly<u32>,
+    in_mod: WriteOnly<u32>,
+    out_param_h: ReadWrite<u32>,
+    out_param_l: ReadWrite<u32>,
     /// only the first 16 bits are usable
-    token: WriteOnly<U32<BigEndian>>,
+    token: WriteOnly<u32>,
     /// status includes go, e, t and 5 reserved bits;
     /// opcode includes the opcode modifier
-    status_opcode: Volatile<U32<BigEndian>>,
+    status_opcode: ReadWrite<u32, StatusOpcode::Register>,
 }
 
 type MailboxAllocation = Option<utils::PageToFrameMapping>;
@@ -314,7 +332,9 @@ impl<'a> CommandInterface<'a> {
         trace!("executing command: {opcode:?}");
 
         // wait until the previous command is done
-        while self.is_pending() {}
+        while self.is_pending() {
+            trace!("wait until the previous command is done");
+        }
 
         // allocate memory
         let input_allocation = input.allocate();
@@ -326,37 +346,44 @@ impl<'a> CommandInterface<'a> {
             0
         };
         // post the command
-        self.hcr.in_param.write(input_param.into());
-        self.hcr.in_mod.write(input_modifier.into());
-        self.hcr.out_param.write(output_param.into());
-        self.hcr.token.write((POLL_TOKEN << 16).into());
+        let ptr = self.hcr as *mut Hcr as *mut u32;
+        self.hcr.in_param_h.set(((input_param >> 32) as u32).to_be());
+        self.hcr.in_param_l.set((input_param as u32).to_be());
+        self.hcr.in_mod.set(input_modifier.to_be());
+        self.hcr.out_param_h.set(((output_param >> 32) as u32).to_be());
+        self.hcr.out_param_l.set((output_param as u32).to_be());
+        self.hcr.token.set((POLL_TOKEN << 16).to_be());
         compiler_fence(Ordering::SeqCst);
-        self.hcr.status_opcode.write(
-            ((1 << HCR_GO_BIT)
+        let status_opcode = (1 << HCR_GO_BIT)
             | (self.exp_toggle << HCR_T_BIT)
             | (0 << HCR_E_BIT) // TODO: event
             | ((opcode_modifier.get() as u32) << HCR_OPMOD_SHIFT)
-            | opcode as u16 as u32)
-                .into(),
-        );
+            | opcode as u16 as u32;
+        self.hcr.status_opcode.set(status_opcode.to_be());
         self.exp_toggle ^= 1;
 
+        trace!("polling for completion");
         // poll for it
         while self.is_pending() {}
 
         // check the status
-        let status = ReturnStatus::from_repr(self.hcr.status_opcode.read().get() >> 24).expect("return status invalid");
+        let status_opcode = u32::from_be(self.hcr.status_opcode.get());
+        let status = ReturnStatus::from_repr(status_opcode >> 24).expect("return status invalid");
         trace!("status: {status:?}");
+        let out_param_h = u32::from_be(self.hcr.out_param_h.get()) as u64;
+        let out_param_l = u32::from_be(self.hcr.out_param_l.get()) as u64;
+        let out_param: u64 = out_param_h << 32 | out_param_l ;
+        trace!("out_param: 0x{out_param:x}");
         match status {
             // on success, return the result
-            ReturnStatus::Ok => Ok(O::from_result(self.hcr.out_param.read().get(), output_allocation)),
+            ReturnStatus::Ok => Ok(O::from_result(out_param, output_allocation)),
             // else, return the status
             err => Err(err),
         }
     }
 
     fn is_pending(&self) -> bool {
-        let status = self.hcr.status_opcode.read().get();
+        let status = u32::from_be(self.hcr.status_opcode.get());
         status & (1 << HCR_GO_BIT) != 0 || (status & (1 << HCR_T_BIT)) == self.exp_toggle
     }
 }

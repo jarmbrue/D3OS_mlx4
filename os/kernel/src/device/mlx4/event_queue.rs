@@ -17,6 +17,7 @@ use modular_bitfield_msb::{
     specifiers::{B10, B16, B2, B22, B24, B4, B40, B5, B6, B60, B7, B72, B96},
 };
 use strum_macros::FromRepr;
+use tock_registers::interfaces::Writeable;
 
 use super::{
     cmd::{CommandInterface, Opcode},
@@ -163,9 +164,7 @@ impl EventQueue {
         // for the EQ number n the relevant doorbell is in
         // DoorbellPage (n / 4) and eq (n % 4)
         let doorbell: &mut DoorbellPage = doorbells[self.number / 4].as_type_mut(0)?;
-        doorbell.eqs[self.number % 4]
-            .val
-            .write(((self.consumer_index & 0xffffff) | (arm as u32) << 31).into());
+        doorbell.eqs[self.number % 4].val.set(((self.consumer_index & 0xffffff) | (arm as u32) << 31).to_be());
         // We still want ordering, just not swabbing, so add a barrier
         compiler_fence(Ordering::SeqCst);
         Ok(())

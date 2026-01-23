@@ -13,7 +13,6 @@ use super::utils::{MappedPages, PageToFrameMapping};
 use crate::device::mlx4::utils::{FillOperation, OperationArgs};
 use crate::memory::PAGE_SIZE;
 use alloc::boxed::Box;
-use byteorder::BigEndian;
 use log::{error, trace, warn};
 use modular_bitfield_msb::{
     bitfield,
@@ -22,8 +21,7 @@ use modular_bitfield_msb::{
 };
 use rdma::{ibv_wc, ibv_wc_flags, ibv_wc_opcode, ibv_wc_status};
 use strum_macros::FromRepr;
-use volatile::WriteOnly;
-use zerocopy::U32;
+use tock_registers::{interfaces::Writeable, registers::WriteOnly};
 
 use super::{
     cmd::{CommandInterface, Opcode},
@@ -74,8 +72,8 @@ impl CompletionQueue {
         let (mut doorbell_page, doorbell_address) =
             utils::create_cont_mapping_with_dma_flags(utils::pages_required(size_of::<CompletionQueueDoorbell>()))?.fetch_in_addr()?;
         let doorbell: &mut CompletionQueueDoorbell = doorbell_page.as_type_mut(0)?;
-        doorbell.update_consumer_index.write(0.into());
-        doorbell.arm_consumer_index.write(0.into());
+        doorbell.update_consumer_index.set(0_u32.to_be());
+        doorbell.arm_consumer_index.set(0_u32.to_be());
         let arm_sequence_number = 1;
         let consumer_index = 0;
 
@@ -125,15 +123,13 @@ impl CompletionQueue {
         let ci = self.consumer_index & 0xffffff;
         let cmd = DOORBELL_REQUEST_NOTIFICATION;
         let doorbell_record: &mut CompletionQueueDoorbell = self.doorbell_page.as_type_mut(0)?;
-        doorbell_record.arm_consumer_index.write((sn << 28 | cmd << 24 | ci).into());
+        doorbell_record.arm_consumer_index.set((sn << 28 | cmd << 24 | ci).to_be());
         // Make sure that the doorbell record in host memory is
         // written before ringing the doorbell via PCI MMIO.
         compiler_fence(Ordering::SeqCst);
         let doorbell: &mut DoorbellPage = doorbells[self.uar_idx].as_type_mut(0)?;
-        doorbell
-            .cq_sn_cmd_num
-            .write((sn << 28 | cmd << 24 | u32::try_from(self.number).unwrap()).into());
-        doorbell.cq_consumer_index.write(ci.into());
+        doorbell.cq_sn_cmd_num.set((sn << 28 | cmd << 24 | self.number).to_be());
+        doorbell.cq_consumer_index.set(ci.to_be());
         Ok(())
     }
 
@@ -171,7 +167,7 @@ impl CompletionQueue {
             }
         }
         let doorbell_record: &mut CompletionQueueDoorbell = self.doorbell_page.as_type_mut(0)?;
-        doorbell_record.update_consumer_index.write((self.consumer_index & 0xffffff).into());
+        doorbell_record.update_consumer_index.set((self.consumer_index & 0xffffff).to_be());
         Ok(completions)
     }
 
@@ -400,11 +396,10 @@ struct CompletionQueueContext {
     doorbell_record_addr: u64,
 }
 
-//#[derive(FromBytes)]
-#[repr(C, packed)]
+#[repr(C)]
 struct CompletionQueueDoorbell {
-    update_consumer_index: WriteOnly<U32<BigEndian>>,
-    arm_consumer_index: WriteOnly<U32<BigEndian>>,
+    update_consumer_index: WriteOnly<u32>,
+    arm_consumer_index: WriteOnly<u32>,
 }
 
 // CQE size is 32. There is 64 B support also available in CX3.
