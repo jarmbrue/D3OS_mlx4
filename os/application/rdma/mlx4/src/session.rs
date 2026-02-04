@@ -92,10 +92,9 @@ impl<'ctx, 'pd> RdmaSession<'ctx, 'pd> {
                     match wr.error() {
                         Some(error) => {
                             println!("Error occurred: {:#?}", error.0);
-                        },
-                        _ => println!("Error occurred" )
+                        }
+                        _ => println!("Error occurred"),
                     }
-                    
                 }
                 println!("Opcode: {:#?}, Bytes transferred: {}", wr.opcode(), wr.len());
             }
@@ -104,15 +103,12 @@ impl<'ctx, 'pd> RdmaSession<'ctx, 'pd> {
         }
     }
 
-    pub fn read<I: SliceIndex<[u8], Output = [u8]>>(local_mr: &'pd LocalMemoryRegion<'pd, u8>, 
-        local_range: I) -> &'pd [u8] {
+    pub fn read<I: SliceIndex<[u8], Output = [u8]>>(local_mr: &'pd LocalMemoryRegion<'pd, u8>, local_range: I) -> &'pd [u8] {
         local_range.index(local_mr)
     }
 
-    pub fn write(local_mr: *mut LocalMemoryRegion<'pd, u8>, packet: &[u8], 
-        local_range: ops::Range<usize>) {
-        let data_range = unsafe { from_raw_parts_mut((*local_mr).as_mut_ptr().add(local_range.start), 
-            local_range.end - local_range.start) };
+    pub fn write(local_mr: *mut LocalMemoryRegion<'pd, u8>, packet: &[u8], local_range: ops::Range<usize>) {
+        let data_range = unsafe { from_raw_parts_mut((*local_mr).as_mut_ptr().add(local_range.start), local_range.end - local_range.start) };
         data_range.copy_from_slice(packet);
     }
 }

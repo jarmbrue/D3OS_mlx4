@@ -12,9 +12,9 @@ pub fn invoke() {
         //let dev_guid = dev.guid().expect("failed to get device guid"); not yet impl.
 
         println!("Found {:?} !", dev_name); //, dev_guid);
-        
+
         let ctx = dev.open().expect("failed to open device context");
-        
+
         let device_stats = ctx.query_device()
             .expect("failed to query device");
 

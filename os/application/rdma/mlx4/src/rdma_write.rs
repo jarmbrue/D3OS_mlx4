@@ -1,16 +1,13 @@
-use super::{session, handshake, integrity};
-use crate::build_constants;
-use rdma_core::{
-    devices
-};
-use rdma::ibv_send_flags;
-use super::*;
-#[cfg(kernel_bench)]
 use super::bench;
-use alloc::{vec};
-use cpu_core::{flush_cache};
-use core::arch::x86_64::{_mm_mfence};
+use super::*;
+use super::{handshake, integrity, session};
+use crate::build_constants;
+use alloc::vec;
 use concurrent::thread::sleep;
+use core::{arch::x86_64::_mm_mfence};
+use cpu_core::flush_cache;
+use rdma::ibv_send_flags;
+use rdma_core::devices;
 
 pub fn invoke() {
     let min_cq_entries = 64;
@@ -29,7 +26,7 @@ pub fn invoke() {
             Err(_) => {
                 println!("failed to get device context => most likely due to port not being ready yet ...");
                 sleep(5000);
-            },
+            }
         }
     };
 
@@ -40,7 +37,7 @@ pub fn invoke() {
     let mut rdma_session = session::RdmaSession::new(&ctx, &pd, alloc_mem, min_cq_entries);
     let udp_session  = session::UdpSession::new();
 
-    sleep(1000);  // give some time for the memory regions
+    sleep(1000); // give some time for the memory regions
 
     let payload_f = integrity::PAYLOAD_FUNCTIONS.seq;
 
@@ -62,18 +59,19 @@ pub fn invoke() {
         let max_send_sge = 1;
 
         let allocated_qp = session::RdmaSession::create_qp(
-            rdma_session.pd, 
-            &rdma_session.cq_send, 
-            &rdma_session.cq_recv, 
+            rdma_session.pd,
+            &rdma_session.cq_send,
+            &rdma_session.cq_recv,
             false,
             max_send_wr,
             0,
             max_send_sge,
-            0
+            0,
         )
         .set_timeout(10)
         .set_min_rnr_timer(30)
-        .build().expect("build of allocated QP was not successful");
+        .build()
+        .expect("build of allocated QP was not successful");
 
         handshake::wait_ready(&udp_session);
         handshake::send_ack(&udp_session);
@@ -117,28 +115,19 @@ pub fn invoke() {
                 &mut rdma_session.mr,
                 &mut remote_mr,
                 &rdma_session.cq_send,
-                None
+                None,
             );
         }
-    
-        handshake::send_ack(&udp_session);
-    }
-    else {
-        println!("Starting as RECEIVER");
-        let allocated_qp = session::RdmaSession::create_qp(
-            rdma_session.pd, 
-            &rdma_session.cq_send, 
-            &rdma_session.cq_recv, 
-            true,
-            0,
-            0,
-            0,
-            0
-        )
-        .build().expect("build of allocated QP was not successful");
 
-        handshake::send_ready_and_wait_ack(&udp_session, 10, 3000);  
-        
+        handshake::send_ack(&udp_session);
+    } else {
+        println!("Starting as RECEIVER");
+        let allocated_qp = session::RdmaSession::create_qp(rdma_session.pd, &rdma_session.cq_send, &rdma_session.cq_recv, true, 0, 0, 0, 0)
+            .build()
+            .expect("build of allocated QP was not successful");
+
+        handshake::send_ready_and_wait_ack(&udp_session, 10, 3000);
+
         let endpoint = allocated_qp.endpoint();
         let local_mr = rdma_session.mr.remote();
 
@@ -161,7 +150,7 @@ pub fn invoke() {
 
             unsafe { flush_cache(&rdma_session.mr) };
 
-            unsafe { _mm_mfence() }; 
+            unsafe { _mm_mfence() };
 
             let packet = session::RdmaSession::read(&rdma_session.mr, 0..alloc_mem);
             
@@ -180,11 +169,7 @@ pub fn invoke() {
             let packet_len = integrity::build_packet(&payload[..], &mut context_buffer).expect("failed to create packet");
             let packet = &context_buffer[..packet_len];
 
-            let total_correct_bytes = bench::get_correct_bytes_per_batch(
-                &mut rdma_session.mr,
-                alloc_mem,
-                packet
-            );
+            let total_correct_bytes = bench::get_correct_bytes_per_batch(&mut rdma_session.mr, alloc_mem, packet);
 
             let hit_rate = ((total_correct_bytes as f64) / (alloc_mem as f64)) * 100.0;
 

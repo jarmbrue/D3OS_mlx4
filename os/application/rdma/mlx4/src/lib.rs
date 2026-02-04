@@ -27,7 +27,7 @@ pub const ALLOC_MEM_S: usize = 10000;
 pub const ALLOC_MEM_M: usize = 100000;
 pub const ALLOC_MEM_L: usize = 1000000;
 pub const ALLOC_MEM_XL: usize = 10000000;
-pub const ALLOC_MEM_XXL: usize= 40000000;
+pub const ALLOC_MEM_XXL: usize = 40000000;
 pub const ALLOC_MEM_XXXL: usize = 1000000000;
 
 pub const ALLOC_MEM: usize = ALLOC_MEM_XL;
@@ -36,8 +36,9 @@ pub const CONTEXT_BUFFER_SIZE: usize = ALLOC_MEM;
 pub const PAYLOAD_FILL: u8 = 0xFA;
 pub const META_DATA_SIZE: usize = MAGIC_HEADER.len() + CHECKSUM_SIZE;
 
-pub fn hit_wo_fault<F>(packet: &[u8], context_buffer: &mut [u8], f: F) 
-where F: Fn(usize) -> u8 
+pub fn hit_wo_fault<F>(packet: &[u8], context_buffer: &mut [u8], f: F)
+where
+    F: Fn(usize) -> u8,
 {
     let payload = build_payload(ALLOC_MEM - META_DATA_SIZE, f);
 

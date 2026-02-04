@@ -6,8 +6,7 @@ fn main() {
     let source_ip = std::env::var("SOURCE_IP").unwrap_or_else(|_| "unknown".to_string());
     let target_ip = std::env::var("TARGET_IP").unwrap_or_else(|_| "unknown".to_string());
     let target_port = std::env::var("TARGET_PORT").unwrap_or_else(|_| "unknown".to_string());
-    let is_sender = std::env::var("IS_SENDER").unwrap_or_else(|_| "false".to_string())
-        .parse::<bool>().unwrap();
+    let is_sender = std::env::var("IS_SENDER").unwrap_or_else(|_| "false".to_string()).parse::<bool>().unwrap();
 
     let host_1 = "ib3";
     let host_2 = "ib4";

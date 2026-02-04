@@ -1,7 +1,6 @@
 //! This module consists of functions to create a direct memory access mailbox for passing parameters to the hca
 //! and getting output back from the hca during verb calls and functions to execute verb calls.
 
-use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{compiler_fence, Ordering};
 
 use super::utils::{OperationArgs, Operations};
@@ -16,6 +15,7 @@ use log::trace;
 use strum_macros::{FromRepr, IntoStaticStr};
 use tock_registers::interfaces::{Readable, Writeable};
 use tock_registers::register_bitfields;
+use tock_registers::registers::{ReadWrite, WriteOnly};
 
 const HCR_BASE: usize = 0x80680;
 const HCR_OPMOD_SHIFT: u32 = 12;

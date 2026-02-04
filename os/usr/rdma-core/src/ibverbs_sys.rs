@@ -1,5 +1,5 @@
 //! This crate is a replacement for rdma-core on Linux.
-//! 
+//!
 //! The struct definitions are partly taken from the rust-bindgen output.
 #![allow(non_camel_case_types)]
 
@@ -133,16 +133,16 @@ pub struct ibv_qp_init_attr<'cq, 'ctx> {
 }
 
 /// Get list of IB devices currently available
-/// 
+///
 /// Return a array of IB devices.
 pub fn ibv_get_device_list() -> Result<Vec<ibv_device>> {
     let cmd_s = uverbs_per_cmd_size(UVERBS_CMD_QUERY_DEVICES) / size_of::<usize>();
     let mut devices_fd = vec![0usize, cmd_s];
 
-    let mut devices : Vec<ibv_device> = Vec::new(); 
-    
+    let mut devices : Vec<ibv_device> = Vec::new();
+
     let buf_addr = devices_fd.as_mut_ptr().addr();
-    
+
     if let Ok(device_c) = syscall(Uverb, &[0, UVERBS_CMD_QUERY_DEVICES, buf_addr]) {
         for i in 0..device_c {
             devices.push(ibv_device { nic: devices_fd[i] });
@@ -159,7 +159,7 @@ pub fn ibv_get_device_name(_device: &ibv_device) -> Option<String> {
 }
 
 /// Return kernel device index
-/// 
+///
 /// Available for the kernel with support of IB device query
 /// over netlink interface. For the unsupported kernels, the
 /// relevant error will be returned.
@@ -184,12 +184,12 @@ pub fn ibv_query_device(context: &ibv_context) -> Result<ibv_device_attr> {
 
     let dev_attr_container = ibv_device_attr_container {
         fw_ver: [b'0'; ibv_device_attr::S],
-        phys_port_cnt: Default::default() 
+        phys_port_cnt: Default::default()
     };
 
     match syscall(Uverb, &[
-        dev_fd, 
-        UVERBS_CMD_QUERY_DEVICE, 
+        dev_fd,
+        UVERBS_CMD_QUERY_DEVICE,
         (&dev_attr_container as *const ibv_device_attr_container).addr()
         ]) {
         Ok(str_s) => {
@@ -198,7 +198,7 @@ pub fn ibv_query_device(context: &ibv_context) -> Result<ibv_device_attr> {
                 fw_ver: fw_str,
                 phys_port_cnt: dev_attr_container.phys_port_cnt
             };
-            
+
             Ok(dev_attr)
         },
         Err(_) => Err(Error::from(ErrorKind::Other))
@@ -217,8 +217,8 @@ pub fn ibv_query_port(
     };
 
     match syscall(Uverb, &[
-            dev_fd, 
-            UVERBS_CMD_QUERY_PORT, 
+            dev_fd,
+            UVERBS_CMD_QUERY_PORT,
             ((&ibv_port_container) as *const ibv_port_attr_container).addr()
         ]) {
         Ok(_) => Ok(ibv_port_container.ibv_port_attr),
@@ -235,7 +235,7 @@ pub fn ibv_query_gid(
 }
 
 /// Allocate a protection domain
-/// 
+///
 /// This is currently just a stub.
 pub fn ibv_alloc_pd(context: &ibv_context) -> Result<ibv_pd<'_>> {
     // TODO: figure out how to actually do this as the Nautilus driver has no
@@ -279,7 +279,7 @@ pub fn ibv_reg_mr<'pd, T>(
 }
 
 /// Create a completion queue
-/// 
+///
 /// @context - Context CQ will be attached to
 /// @cqe - Minimum number of entries required for CQ
 /// @cq_context - Consumer-supplied context returned for completion events
@@ -337,16 +337,16 @@ pub fn ibv_create_qp<'ctx, 'cq>(
         (&ibv_qp_container as *const ibv_qp_container).addr()
     ]) {
         Ok(_) => {
-            Ok(ibv_qp { 
-                ops: &IBV_CONTEXT_OPS, 
-                qp_num: ibv_qp_container.qp_num, 
-                send_cq, 
-                recv_cq, 
+            Ok(ibv_qp {
+                ops: &IBV_CONTEXT_OPS,
+                qp_num: ibv_qp_container.qp_num,
+                send_cq,
+                recv_cq,
             })
         },
         Err(_) => Err(Error::from(ErrorKind::Other))
     }
-    
+
 }
 
 /// Modify a queue pair.
@@ -356,8 +356,8 @@ pub fn ibv_modify_qp(
     let dev_fd = qp.recv_cq.context.lock();
 
     let ibv_qp_modify_container = ibv_qp_modify_container {
-        qp_num: qp.qp_num, 
-        attr, 
+        qp_num: qp.qp_num,
+        attr,
         attr_mask
     };
 
@@ -401,7 +401,7 @@ unsafe fn ibv_post_send(
 
     let ibv_send_wr_container = ibv_qp_post_send_container {
         ibv_send_wr: wr,
-        qp_num: qp.qp_num 
+        qp_num: qp.qp_num
     };
 
     match syscall(Uverb, &[
@@ -422,7 +422,7 @@ unsafe fn ibv_post_recv(
 
     let ibv_recv_wr_container = ibv_qp_post_recv_container {
         ibv_recv_wr: wr,
-        qp_num: qp.qp_num 
+        qp_num: qp.qp_num
     };
 
     match syscall(Uverb, &[

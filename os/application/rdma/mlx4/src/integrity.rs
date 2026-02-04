@@ -1,6 +1,6 @@
-use crc32fast::Hasher;
-use alloc::{vec, vec::Vec};
 use super::PAYLOAD_FILL;
+use alloc::{vec, vec::Vec};
+use crc32fast::Hasher;
 
 pub const MAGIC_HEADER: [u8; 10] = [0x44, 0x33, 0x4F, 0x53, 0x2D, 0x52, 0x44, 0x4D, 0x41, 0x00];
 pub const CHECKSUM_SIZE: usize = (u32::BITS / 8) as usize;
@@ -54,10 +54,7 @@ pub fn validate_packet(packet: &[u8]) -> Result<&[u8], IntegrityError> {
     Ok(payload)
 }
 
-pub fn build_packet(
-    payload: &[u8],
-    buffer: &mut [u8],
-) -> Result<usize, IntegrityError> {
+pub fn build_packet(payload: &[u8], buffer: &mut [u8]) -> Result<usize, IntegrityError> {
     let total_len = MAGIC_HEADER.len() + payload.len() + CHECKSUM_SIZE;
     if buffer.len() < total_len {
         return Err(IntegrityError::PacketTooSmall);
@@ -73,10 +70,7 @@ pub fn build_packet(
     Ok(total_len)
 }
 
-pub fn build_payload<F>(
-    payload_size: usize,
-    pattern: F,
-) -> Vec<u8>
+pub fn build_payload<F>(payload_size: usize, pattern: F) -> Vec<u8>
 where
     F: Fn(usize) -> u8,
 {
@@ -94,7 +88,7 @@ pub struct pattern_functions {
     pub seq: fn(usize) -> u8,
     pub rot: fn(usize) -> u8,
     pub lcg: fn(usize) -> u8,
-    pub fill: fn(usize) -> u8
+    pub fill: fn(usize) -> u8,
 }
 
 pub const PAYLOAD_FUNCTIONS: pattern_functions = pattern_functions {
@@ -102,7 +96,7 @@ pub const PAYLOAD_FUNCTIONS: pattern_functions = pattern_functions {
     seq: pattern_sequential,
     rot: pattern_mix_rotate,
     lcg: pattern_glibc_lcg,
-    fill: pattern_fill
+    fill: pattern_fill,
 };
 
 fn pattern_fill(_: usize) -> u8 {

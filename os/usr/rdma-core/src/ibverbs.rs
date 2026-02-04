@@ -69,7 +69,6 @@
 extern crate alloc;
 mod ibverbs_sys;
 
-use core::alloc::Layout;
 use core::convert::TryInto;
 use core::ffi::CStr;
 use core::marker::PhantomData;
@@ -79,7 +78,6 @@ use core::ptr;
 use mm::MmapFlags;
 use mm::mmap;
 use rdma::{ibv_port_attr, ibv_recv_wr, ibv_send_wr, ibv_send_flags, ibv_qp_cap };
-use mm::PAGE_SIZE;
 
 use ibverbs_sys as ffi;
 
@@ -350,7 +348,7 @@ impl Context {
 
         // let mut gid = ffi::ibv_gid::default();
         let gid = ffi::ibv_query_gid(&ctx, PORT_NUM, 0)?.into();
-        
+
         Ok(Context {
             ctx,
             port_attr,
@@ -1235,18 +1233,18 @@ impl<'ctx> ProtectionDomain<'ctx> {
         assert!(mem::size_of::<T>() > 0);
 
         let size = n * mem::size_of::<T>();
-        
+
         // fault in, reducing latency ; map at 40 TB
         let data_ptr = mmap(
-            40 * 1024 * 1024 * 1024 * 1024, size, 
+            40 * 1024 * 1024 * 1024 * 1024, size,
             MmapFlags::ANONYMOUS | MmapFlags::POPULATE | MmapFlags::ALLOC_AT )
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "allocation failed"))?;
 
-        let mut data = unsafe { 
+        let mut data = unsafe {
             Vec::from_raw_parts(
                 data_ptr.as_mut_ptr() as *mut T,
                 n,
-                n) 
+                n)
         };
 
         let access = ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE
@@ -1350,11 +1348,11 @@ impl<'res> QueuePair<'res> {
             }
 
             let wr_inner = ffi::ibv_send_wr_builder(
-                wr_id, 
-                ffi::ibv_wr_opcode::IBV_WR_SEND, 
-                wr_send_flags, 
-                Default::default(), 
-                next, 
+                wr_id,
+                ffi::ibv_wr_opcode::IBV_WR_SEND,
+                wr_send_flags,
+                Default::default(),
+                next,
                 sg_list);
 
             next = Box::into_raw(wr_inner);
@@ -1520,11 +1518,11 @@ impl<'res> QueuePair<'res> {
         R: sliceindex::SliceIndex<[T], Output = [T]>,
     {
         self.rdma_backbone(
-            remote_mr, 
-            remote_ranges, 
-            local_mr, 
-            local_ranges, 
-            wr_ids, 
+            remote_mr,
+            remote_ranges,
+            local_mr,
+            local_ranges,
+            wr_ids,
             ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE,
         send_flags)
     }
@@ -1573,11 +1571,11 @@ impl<'res> QueuePair<'res> {
         R: sliceindex::SliceIndex<[T], Output = [T]>,
     {
         self.rdma_backbone(
-            remote_mr, 
-            remote_ranges, 
-            local_mr, 
-            local_ranges, 
-            wr_ids, 
+            remote_mr,
+            remote_ranges,
+            local_mr,
+            local_ranges,
+            wr_ids,
             ffi::ibv_wr_opcode::IBV_WR_RDMA_READ,
             send_flags)
     }
@@ -1648,14 +1646,14 @@ impl<'res> QueuePair<'res> {
             }
 
             let wr_inner = ffi::ibv_send_wr_builder(
-                wr_id, 
+                wr_id,
                 opcode,
-                wr_send_flags, 
+                wr_send_flags,
                 ffi::ibv_send_wr_wr::rdma {
                     remote_addr: remote_start,
                     rkey: remote_mr.rkey,
-                }, 
-                next, 
+                },
+                next,
                 sg_list);
 
             next = Box::into_raw(wr_inner);
@@ -1678,7 +1676,7 @@ impl<'res> QueuePair<'res> {
         // immediately after the call returns.
 
         let _bad_wr = unsafe { self.qp.ops.post_send.as_ref().unwrap()(&mut self.qp, wr)? };
-        
+
         while !next.is_null() {
             let _next = unsafe { Box::from_raw(next) };
             next = _next.next;

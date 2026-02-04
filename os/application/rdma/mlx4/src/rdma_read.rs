@@ -17,9 +17,12 @@ use terminal::{println, print};
 pub fn invoke() {
     let min_cq_entries = 1000;
     let alloc_mem = ALLOC_MEM;
-    let context_buffer = mmap(30 * 1024 * 1024 * 1024 * 1024, CONTEXT_BUFFER_SIZE,
-        MmapFlags::ANONYMOUS | MmapFlags::POPULATE | MmapFlags::ALLOC_AT)
-        .expect("mmap failed");
+    let context_buffer = mmap(
+        30 * 1024 * 1024 * 1024 * 1024,
+        CONTEXT_BUFFER_SIZE,
+        MmapFlags::ANONYMOUS | MmapFlags::POPULATE | MmapFlags::ALLOC_AT,
+    )
+    .expect("mmap failed");
 
     println!("waiting for device context");
 
@@ -35,7 +38,7 @@ pub fn invoke() {
             Err(_) => {
                 println!("failed to get device context => most likely due to port not being ready yet ...");
                 sleep(1000);
-            },
+            }
         }
     };
 
@@ -55,14 +58,14 @@ pub fn invoke() {
         let max_send_wr = 10;
         let max_send_sge = 1;
         let allocated_qp = session::RdmaSession::create_qp(
-            rdma_session.pd, 
-            &rdma_session.cq_send, 
-            &rdma_session.cq_recv, 
+            rdma_session.pd,
+            &rdma_session.cq_send,
+            &rdma_session.cq_recv,
             false,
             max_send_wr,
             0,
             max_send_sge,
-            0
+            0,
         )
         .set_timeout(20)
         .set_min_rnr_timer(30)
@@ -105,9 +108,9 @@ pub fn invoke() {
 
             println!("Checking data integrity...");
 
-            unsafe { flush_cache(& *mr) };
+            unsafe { flush_cache(&*mr) };
 
-            unsafe { _mm_mfence() }; 
+            unsafe { _mm_mfence() };
 
             let packet = unsafe { session::RdmaSession::read(&mut *mr, 0..alloc_mem) };
             
@@ -138,26 +141,16 @@ pub fn invoke() {
         }
 
         handshake::send_ack(&udp_session);
-    }
-    else {
+    } else {
         println!("Starting as RECEIVER");
 
-        let allocated_qp = session::RdmaSession::create_qp(
-            rdma_session.pd, 
-            &rdma_session.cq_send, 
-            &rdma_session.cq_recv, 
-            true,
-            0,
-            0,
-            0,
-            0
-        )
-        .build()
-        .expect("build of allocated QP was not successful");
+        let allocated_qp = session::RdmaSession::create_qp(rdma_session.pd, &rdma_session.cq_send, &rdma_session.cq_recv, true, 0, 0, 0, 0)
+            .build()
+            .expect("build of allocated QP was not successful");
 
         handshake::send_ready_and_wait_ack(&udp_session, 10, 3000); // this has to be optimized since
         // otherwise we would fire to many ready messages and fill up the buffer to fast !
-        
+
         let mr = &mut rdma_session.mr;
 
         let endpoint = allocated_qp.endpoint();
@@ -177,7 +170,7 @@ pub fn invoke() {
 
         session::RdmaSession::write(mr, packet, 0..alloc_mem);
 
-        unsafe { _mm_mfence() }; 
+        unsafe { _mm_mfence() };
 
         unsafe { flush_cache(mr) };
 

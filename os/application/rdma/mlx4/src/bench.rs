@@ -75,15 +75,9 @@ fn generate_partitions(total: usize, parts: usize) -> Vec<Range<usize>> {
 fn local_range_init() -> [Vec<Vec<Range<usize>>>; BATCHES] {
     let mut result = [(); BATCHES].map(|_| Vec::new());
 
-    for (i, parts) in [1, 2, 4, 8, 16, 32, 64, 128, 256]
-        .into_iter()
-        .enumerate()
-        .take(BATCHES) 
-    {
+    for (i, parts) in [1, 2, 4, 8, 16, 32, 64, 128, 256].into_iter().enumerate().take(BATCHES) {
         let partitions = generate_partitions(ALLOC_MEM, parts);
-        result[i] = partitions.into_iter()
-            .map(|part| vec![part])
-            .collect();
+        result[i] = partitions.into_iter().map(|part| vec![part]).collect();
     }
 
     result
@@ -92,15 +86,9 @@ fn local_range_init() -> [Vec<Vec<Range<usize>>>; BATCHES] {
 fn remote_range_init() -> [Vec<Range<u64>>; BATCHES] {
     let mut result = [(); BATCHES].map(|_| Vec::new());
 
-    for (i, parts) in [1, 2, 4, 8, 16, 32, 64, 128, 256]
-        .into_iter()
-        .enumerate()
-        .take(BATCHES)
-    {
+    for (i, parts) in [1, 2, 4, 8, 16, 32, 64, 128, 256].into_iter().enumerate().take(BATCHES) {
         let partitions_usize = generate_partitions(ALLOC_MEM, parts);
-        let partitions_u64 = partitions_usize
-            .into_iter()
-            .map(|r| (r.start as u64)..(r.end as u64));
+        let partitions_u64 = partitions_usize.into_iter().map(|r| (r.start as u64)..(r.end as u64));
         result[i].extend(partitions_u64);
     }
 
@@ -127,15 +115,10 @@ fn send_flags_init() -> [Vec<ibv_send_flags>; BATCHES] {
 }
 
 // cloning generates a bit of overhead, but for now we'll leave it that way !
-pub fn rdma_bench( 
-    rdma_type: SPEC_RDMA_TYPE, 
-    alloc_mem: usize, 
-    qp: &mut QueuePair<'_>, 
-    mr: &mut LocalMemoryRegion<'_, u8>,
-    remote_mr: &mut RemoteMemoryRegion<u8>,
-    cq_send: &CompletionQueue<'_>,
-    expected_packet: Option<&[u8]>) {
-
+pub fn rdma_bench(
+    rdma_type: SPEC_RDMA_TYPE, benchmark_type: BENCHMARK, alloc_mem: usize, qp: &mut QueuePair<'_>, mr: &mut LocalMemoryRegion<'_, u8>,
+    remote_mr: &mut RemoteMemoryRegion<u8>, cq_send: &CompletionQueue<'_>, expected_packet: Option<&[u8]>,
+) {
     LOCAL_RANGES.call_once(local_range_init);
     REMOTE_RANGES.call_once(remote_range_init);
     WORK_IDS.call_once(work_id_init);
@@ -161,27 +144,26 @@ pub fn rdma_bench(
             let l_ranges = l_ranges_ref.clone();
             let w_ranges = w_ranges_ref.clone();
             let s_ranges = s_ranges_ref.clone();
-            
+
             #[cfg(latency)]
             {
                 start_us = get_time_in_us();
             }
-            
-            
+
             let _result = match rdma_type {
                 SPEC_RDMA_TYPE::RDMA_READ => unsafe { qp.rdma_read(
-                    remote_mr, 
-                    r_ranges, 
-                    mr, 
-                    l_ranges, 
+                    remote_mr,
+                    r_ranges,
+                    mr,
+                    l_ranges,
                     w_ranges,
                     s_ranges).expect("problems during rdma read!")
                 },
                 SPEC_RDMA_TYPE::RDMA_WRITE => unsafe { qp.rdma_write(
-                    mr, 
-                    l_ranges, 
-                    remote_mr, 
-                    r_ranges, 
+                    mr,
+                    l_ranges,
+                    remote_mr,
+                    r_ranges,
                     w_ranges,
                     s_ranges).expect("problems during rdma write!")
                 }
@@ -228,8 +210,7 @@ pub fn rdma_bench(
     (BENCH_MARK_OPS.hit_rate_op)(&data_collect_per_batch[..], alloc_mem);
 }
 
-pub fn get_correct_bytes_per_batch(mr: &mut LocalMemoryRegion<'_, u8>, 
-    alloc_mem: usize, expected_packet: &[u8]) -> u64 {
+pub fn get_correct_bytes_per_batch(mr: &mut LocalMemoryRegion<'_, u8>, alloc_mem: usize, expected_packet: &[u8]) -> u64 {
     let mut correct_bytes = 0u64;
 
     unsafe { flush_cache(mr) };
@@ -260,7 +241,7 @@ pub fn get_correct_bytes_per_batch(mr: &mut LocalMemoryRegion<'_, u8>,
     }
 } */
 
-fn data_hit_rate(data_buffer : &[[u64; ITERATIONS]], packet_size_bytes: usize) {
+fn data_hit_rate(data_buffer: &[[u64; ITERATIONS]], packet_size_bytes: usize) {
     for (batch_idx, batch) in data_buffer.iter().enumerate() {
         let total_correct_bytes: u64 = batch.iter().sum();
         let max_possible_bytes = (ITERATIONS * packet_size_bytes) as u64;
@@ -270,7 +251,7 @@ fn data_hit_rate(data_buffer : &[[u64; ITERATIONS]], packet_size_bytes: usize) {
     }
 }
 
-fn latency(data_buffer : &[[u64; ITERATIONS]]) {
+fn latency(data_buffer: &[[u64; ITERATIONS]]) {
     for (batch_idx, batch) in data_buffer.iter().enumerate() {
         println!("--- Batch {} ---", batch_idx);
 
@@ -295,7 +276,7 @@ fn latency(data_buffer : &[[u64; ITERATIONS]]) {
     }
 }
 
-fn throughput(data_buffer : &[[u64; ITERATIONS]], packet_size_bytes: usize) {
+fn throughput(data_buffer: &[[u64; ITERATIONS]], packet_size_bytes: usize) {
     for (batch_idx, batch) in data_buffer.iter().enumerate() {
         let total_time_us: u64 = batch.iter().sum(); // we could sub this with batch[0] its the same
         let total_bytes = (ITERATIONS * packet_size_bytes) as f64;

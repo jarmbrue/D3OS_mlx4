@@ -46,7 +46,7 @@ args = [
     # Network configuration
     "-nic", "model=rtl8139,id=rtl8139,hostfwd=udp::1797-:1797,hostfwd=tcp::1797-:1797",
     "-object", "filter-dump,id=filter1,netdev=rtl8139,file=rtl8139.dump",
-    
+
     # Infiniband configuration
     "-device vfio-pci,host=${CARGO_INFINIBAND_BUS_ID}",
 
@@ -141,7 +141,7 @@ args = [ "Ready to debug" ]
 dependencies = [ "image", "hdd", "ovmf" ]
 
 [tasks.gdb]
-command = "gdb" 
+command = "gdb"
 args = [ "-ex", "break start", "-ex", "target remote 127.0.0.1:1234", "-ex", "continue", "loader/kernel.elf" ]
 
 [tasks.ovmf]

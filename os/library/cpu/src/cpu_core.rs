@@ -21,13 +21,13 @@ pub unsafe fn flush_cache(buffer: &[u8]) {
     let mut offset = 0;
     #[cfg(target_arch = "x86_64")]
     let cache_line_size = get_cache_line_size();
-    
+
     #[cfg(not(target_arch = "x86_64"))]
     let cache_line_size = 64;
 
     while offset < len {
         unsafe { _mm_clflush(ptr.add(offset) as *const _) }; // flush one cache line
-        
+
         offset += cache_line_size;
     }
     unsafe { _mm_sfence() }; // ensure all flushes are globally visible
