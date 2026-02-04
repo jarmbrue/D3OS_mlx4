@@ -1,15 +1,13 @@
-use rdma_core::{
-    LocalMemoryRegion, RemoteMemoryRegion, QueuePair, CompletionQueue
-};
-use rdma::ibv_send_flags;
+use super::ALLOC_MEM;
 use super::session::RdmaSession;
 use alloc::{vec, vec::Vec};
 use core::ops::Range;
-use super::ALLOC_MEM;
+use cpu_core::flush_cache;
+use rdma::ibv_send_flags;
+use rdma_core::{CompletionQueue, LocalMemoryRegion, QueuePair, RemoteMemoryRegion};
 use spin::Once;
+use terminal::{print, println};
 use time::get_time_in_us;
-use cpu_core::{flush_cache};
-use terminal::{println, print};
 
 const ITERATIONS: usize = 1000;
 const MAX_OUTSTANDING_BATCHES: usize = ITERATIONS + 24;
@@ -22,34 +20,16 @@ static WORK_IDS: Once<[Vec<u64>; BATCHES]> = Once::new();
 static SEND_FLAGS: Once<[Vec<ibv_send_flags>; BATCHES]> = Once::new();
 
 #[derive(Copy, Clone)]
-pub enum SPEC_TRANSFER_TYPE {
-    SEND,
-    RECV
+pub enum SpecRdmaType {
+    RdmaRead,
+    RdmaWrite,
 }
 
-#[derive(Copy, Clone)]
-pub enum SPEC_RDMA_TYPE {
-    RDMA_READ,
-    RDMA_WRITE
+pub enum Benchmark {
+    Latency,
+    Throughput,
+    Hit,
 }
-
-pub enum BENCHMARK {
-    LATENCY,
-    THROUGHPUT,
-    HIT
-}
-
-pub struct bench_mark_ops {
-    hit_rate_op: fn(&[[u64; ITERATIONS]], usize),
-    latency_op: fn(&[[u64; ITERATIONS]]),
-    throughput_op: fn(&[[u64; ITERATIONS]], usize)
-}
-
-const BENCH_MARK_OPS: bench_mark_ops = bench_mark_ops {
-    hit_rate_op: data_hit_rate,
-    latency_op: latency,
-    throughput_op: throughput
-};
 
 // benchmarks:
 // 1st : batch-size 1
@@ -116,7 +96,7 @@ fn send_flags_init() -> [Vec<ibv_send_flags>; BATCHES] {
 
 // cloning generates a bit of overhead, but for now we'll leave it that way !
 pub fn rdma_bench(
-    rdma_type: SPEC_RDMA_TYPE, benchmark_type: BENCHMARK, alloc_mem: usize, qp: &mut QueuePair<'_>, mr: &mut LocalMemoryRegion<'_, u8>,
+    rdma_type: SpecRdmaType, benchmark_type: Benchmark, alloc_mem: usize, qp: &mut QueuePair<'_>, mr: &mut LocalMemoryRegion<'_, u8>,
     remote_mr: &mut RemoteMemoryRegion<u8>, cq_send: &CompletionQueue<'_>, expected_packet: Option<&[u8]>,
 ) {
     LOCAL_RANGES.call_once(local_range_init);
@@ -124,7 +104,6 @@ pub fn rdma_bench(
     WORK_IDS.call_once(work_id_init);
     SEND_FLAGS.call_once(send_flags_init);
 
-    #[cfg(any(throughput, latency))]
     let mut start_us = 0;
 
     let mut data_collect_per_batch: [[u64; ITERATIONS]; BATCHES] = [[0; ITERATIONS]; BATCHES];
@@ -134,10 +113,10 @@ pub fn rdma_bench(
         let w_ranges_ref = unsafe { &WORK_IDS.get_unchecked()[batch_idx] };
         let s_ranges_ref = unsafe { &SEND_FLAGS.get_unchecked()[batch_idx] };
 
-        #[cfg(throughput)]
-        {
-            start_us = get_time_in_us();
-        }
+        start_us = match benchmark_type {
+            Benchmark::Throughput => get_time_in_us(),
+            _ => start_us,
+        };
 
         for i in 0..ITERATIONS {
             let r_ranges = r_ranges_ref.clone();
@@ -145,69 +124,54 @@ pub fn rdma_bench(
             let w_ranges = w_ranges_ref.clone();
             let s_ranges = s_ranges_ref.clone();
 
-            #[cfg(latency)]
-            {
-                start_us = get_time_in_us();
-            }
-
-            let _result = match rdma_type {
-                SPEC_RDMA_TYPE::RDMA_READ => unsafe { qp.rdma_read(
-                    remote_mr,
-                    r_ranges,
-                    mr,
-                    l_ranges,
-                    w_ranges,
-                    s_ranges).expect("problems during rdma read!")
-                },
-                SPEC_RDMA_TYPE::RDMA_WRITE => unsafe { qp.rdma_write(
-                    mr,
-                    l_ranges,
-                    remote_mr,
-                    r_ranges,
-                    w_ranges,
-                    s_ranges).expect("problems during rdma write!")
-                }
+            start_us = match benchmark_type {
+                Benchmark::Latency => get_time_in_us(),
+                _ => start_us,
             };
 
-            #[cfg(any(hit, latency))]
-            RdmaSession::poll_cq::<10>(cq_send, 1);
+            let _result = match rdma_type {
+                SpecRdmaType::RdmaRead => unsafe {
+                    qp.rdma_read(remote_mr, r_ranges, mr, l_ranges, w_ranges, s_ranges)
+                        .expect("problems during rdma read!")
+                },
+                SpecRdmaType::RdmaWrite => unsafe {
+                    qp.rdma_write(mr, l_ranges, remote_mr, r_ranges, w_ranges, s_ranges)
+                        .expect("problems during rdma write!")
+                },
+            };
 
-            #[cfg(latency)]
-            {
-                let end_us = get_time_in_us();
-                let elapsed_time_us = end_us - start_us;
-                data_collect_per_batch[batch_idx][i] = elapsed_time_us as u64;
-            }
-
-            #[cfg(all(hit, read))]
-            {
-                let correct_bytes = get_correct_bytes_per_batch(
-                    mr,
-                    alloc_mem,
-                    expected_packet.unwrap()
-                );
-                data_collect_per_batch[batch_idx][i] = correct_bytes;
+            match benchmark_type {
+                Benchmark::Latency => {
+                    RdmaSession::poll_cq::<10>(cq_send, 1);
+                    let end_us = get_time_in_us();
+                    let elapsed_time_us = end_us - start_us;
+                    data_collect_per_batch[batch_idx][i] = elapsed_time_us as u64;
+                },
+                Benchmark::Hit => {
+                    RdmaSession::poll_cq::<10>(cq_send, 1);
+                    let correct_bytes = get_correct_bytes_per_batch(mr, alloc_mem, expected_packet.unwrap());
+                    data_collect_per_batch[batch_idx][i] = correct_bytes;
+                },
+                _ => (),
             }
         }
 
-        #[cfg(throughput)]
-        {
-            RdmaSession::poll_cq::<MAX_OUTSTANDING_BATCHES>(cq_send, ITERATIONS);
-
-            let end_us = get_time_in_us();
-            let elapsed_time_us = end_us - start_us;
-            data_collect_per_batch[batch_idx][0] = elapsed_time_us as u64;
+        match benchmark_type {
+            Benchmark::Throughput => {
+                RdmaSession::poll_cq::<MAX_OUTSTANDING_BATCHES>(cq_send, ITERATIONS);
+                let end_us = get_time_in_us();
+                let elapsed_time_us = end_us - start_us;
+                data_collect_per_batch[batch_idx][0] = elapsed_time_us as u64;
+            },
+            _ => (),
         }
     }
 
-    #[cfg(latency)]
-    (BENCH_MARK_OPS.latency_op)(&data_collect_per_batch[..]);
-
-    #[cfg(throughput)]
-    (BENCH_MARK_OPS.throughput_op)(&data_collect_per_batch[..], alloc_mem);
-
-    #[cfg(all(hit, read))]
-    (BENCH_MARK_OPS.hit_rate_op)(&data_collect_per_batch[..], alloc_mem);
+    match benchmark_type {
+        Benchmark::Latency => latency(&data_collect_per_batch[..]),
+        Benchmark::Throughput => throughput(&data_collect_per_batch[..], alloc_mem),
+        Benchmark::Hit => data_hit_rate(&data_collect_per_batch[..], alloc_mem),
+    }
 }
 
 pub fn get_correct_bytes_per_batch(mr: &mut LocalMemoryRegion<'_, u8>, alloc_mem: usize, expected_packet: &[u8]) -> u64 {
@@ -225,21 +189,6 @@ pub fn get_correct_bytes_per_batch(mr: &mut LocalMemoryRegion<'_, u8>, alloc_mem
 
     correct_bytes
 }
-
-/*pub fn transfer_bench() {
-    for batch_size in (0..BATCHES) {
-        for i in (0..ITERATIONS) {
-            #[cfg(hit)]
-            (BENCH_MARK_OPS.hit_rate_op)();
-
-            #[cfg(latency)]
-            (BENCH_MARK_OPS.latency_op)();
-
-            #[cfg(throughput)]
-            (BENCH_MARK_OPS.throughput_op)();
-        }
-    }
-} */
 
 fn data_hit_rate(data_buffer: &[[u64; ITERATIONS]], packet_size_bytes: usize) {
     for (batch_idx, batch) in data_buffer.iter().enumerate() {

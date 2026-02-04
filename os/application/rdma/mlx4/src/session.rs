@@ -32,7 +32,7 @@ impl<'ctx, 'pd> RdmaSession<'ctx, 'pd> {
     {
         let port_stats = ctx.query_port();
 
-        println!("State: {:?}, Max MTU: {:?}, Active MTU: {:?}", 
+        println!("State: {:?}, Max MTU: {:?}, Active MTU: {:?}",
             port_stats.state, port_stats.max_mtu, port_stats.active_mtu);
 
         let mut mr = pd.allocate::<u8>(alloc_mem).expect("failed to pin memory");
@@ -44,7 +44,7 @@ impl<'ctx, 'pd> RdmaSession<'ctx, 'pd> {
 
         Self { ctx, pd, mr, cq_send, cq_recv }
     }
-    
+
     pub fn create_qp(
         pd: &'pd ProtectionDomain<'ctx>,
         cq_send: &'ctx CompletionQueue<'ctx>,
@@ -55,12 +55,12 @@ impl<'ctx, 'pd> RdmaSession<'ctx, 'pd> {
         max_send_sge: u32,
         max_recv_sge: u32
     ) -> QueuePairBuilder<'ctx> where 'pd: 'ctx {
-        let cap = ibv_qp_cap { 
-            max_send_wr, 
-            max_recv_wr, 
-            max_send_sge, 
-            max_recv_sge, 
-            max_inline_data: 0 
+        let cap = ibv_qp_cap {
+            max_send_wr,
+            max_recv_wr,
+            max_send_sge,
+            max_recv_sge,
+            max_inline_data: 0
         };
         let mut builder = pd.create_qp(cq_send, cq_recv, Type::IBV_QPT_RC, cap);
         if allow_remote_rw {
@@ -85,7 +85,6 @@ impl<'ctx, 'pd> RdmaSession<'ctx, 'pd> {
         while completed < wait_until {
             let completions = cq_send.poll(&mut wc).expect("failed to poll for completions");
 
-            // #[cfg(user_test)]
             for wr in completions.iter() {
                 println!("Work request ID: {}", wr.wr_id());
                 if !wr.is_valid() {
@@ -123,7 +122,7 @@ impl UdpSession {
         let ip = build_constants::TARGET_IP.parse::<Ipv4Address>().unwrap();
 
         println!("Target: {} ({})", build_constants::TARGET_HOST, ip);
-        println!("Local: {} ({})", build_constants::THIS_HOST, 
+        println!("Local: {} ({})", build_constants::THIS_HOST,
             build_constants::THIS_IP.parse::<Ipv4Address>().unwrap());
 
         connect(fd, ip, tgt_port).expect("error while connecting");

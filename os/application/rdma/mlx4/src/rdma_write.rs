@@ -1,6 +1,7 @@
 use super::bench;
 use super::*;
 use super::{handshake, integrity, session};
+use crate::bench::Benchmark;
 use crate::build_constants;
 use alloc::vec;
 use concurrent::thread::sleep;
@@ -9,7 +10,7 @@ use cpu_core::flush_cache;
 use rdma::ibv_send_flags;
 use rdma_core::devices;
 
-pub fn invoke() {
+pub fn invoke(benchmark: Benchmark, only_test: bool) {
     let min_cq_entries = 64;
     let alloc_mem = ALLOC_MEM;
     let mut context_buffer = [0u8; CONTEXT_BUFFER_SIZE];
@@ -90,28 +91,25 @@ pub fn invoke() {
 
         handshake::wait_ack(&udp_session);
 
-        #[cfg(user_test)]
-        {
+        if only_test {
             println!("Performing RDMA write...");
-        
+
             let _result = unsafe { qp.rdma_write(
-                &mut rdma_session.mr, 
-                vec![vec![0..alloc_mem]], 
-                &mut remote_mr, 
-                vec![0..(alloc_mem as u64)], 
+                &mut rdma_session.mr,
+                vec![vec![0..alloc_mem]],
+                &mut remote_mr,
+                vec![0..(alloc_mem as u64)],
                 vec![1],
                 vec![ibv_send_flags::SIGNALED]
             ).expect("ups ... something went wrong!") };
-        
-            session::RdmaSession::poll_cq::<10>(&rdma_session.cq_send, 1);
-        }
 
-        #[cfg(user_bench)]
-        {
+            session::RdmaSession::poll_cq::<10>(&rdma_session.cq_send, 1);
+        } else {
             bench::rdma_bench(
-                bench::SPEC_RDMA_TYPE::RDMA_WRITE,
-                alloc_mem, 
-                &mut qp, 
+                bench::SpecRdmaType::RdmaWrite,
+                benchmark,
+                alloc_mem,
+                &mut qp,
                 &mut rdma_session.mr,
                 &mut remote_mr,
                 &rdma_session.cq_send,
@@ -144,8 +142,7 @@ pub fn invoke() {
 
         handshake::wait_ack(&udp_session);
 
-        #[cfg(user_test)]
-        {
+        if only_test {
             println!("Checking data integrity...");
 
             unsafe { flush_cache(&rdma_session.mr) };
@@ -153,17 +150,14 @@ pub fn invoke() {
             unsafe { _mm_mfence() };
 
             let packet = session::RdmaSession::read(&rdma_session.mr, 0..alloc_mem);
-            
+
             let _ = integrity::validate_packet(packet)
                 .map_err(move |e| {
                     hit_wo_fault(packet, &mut context_buffer, payload_f);
                     println!("Data integrity failed due to {:?}", e);
                     e
                 });
-        }
-        
-        #[cfg(user_bench)]
-        {
+        } else {
             let payload = integrity::build_payload(ALLOC_MEM - META_DATA_SIZE, payload_f);
 
             let packet_len = integrity::build_packet(&payload[..], &mut context_buffer).expect("failed to create packet");

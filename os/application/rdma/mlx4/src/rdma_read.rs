@@ -1,11 +1,10 @@
 use super::{session, handshake, integrity};
-use crate::build_constants;
+use crate::{bench::Benchmark, build_constants};
 use mm::{MmapFlags, mmap};
 use rdma_core::{
     devices, LocalMemoryRegion
 };
 use rdma::ibv_send_flags;
-#[cfg(user_bench)]
 use super::bench;
 use super::*;
 use alloc::{vec};
@@ -14,7 +13,7 @@ use core::arch::x86_64::{_mm_mfence};
 use concurrent::thread::sleep;
 use terminal::{println, print};
 
-pub fn invoke() {
+pub fn invoke(benchmark: Benchmark, only_test: bool) {
     let min_cq_entries = 1000;
     let alloc_mem = ALLOC_MEM;
     let context_buffer = mmap(
@@ -92,14 +91,13 @@ pub fn invoke() {
         handshake::wait_ack(&udp_session);
 
         println!("Performing RDMA read...");
-        
-        #[cfg(user_test)]
-        {
+
+        if only_test {
             let result = unsafe { qp.rdma_read(
-                &mut remote_mr, 
-                vec![0..alloc_mem as u64], 
-                &mut *mr, 
-                vec![vec![0..alloc_mem]], 
+                &mut remote_mr,
+                vec![0..alloc_mem as u64],
+                &mut *mr,
+                vec![vec![0..alloc_mem]],
                 vec![1],
                 vec![ibv_send_flags::SIGNALED]
             ).expect("ups ... something went wrong! ") };
@@ -113,26 +111,24 @@ pub fn invoke() {
             unsafe { _mm_mfence() };
 
             let packet = unsafe { session::RdmaSession::read(&mut *mr, 0..alloc_mem) };
-            
+
             let _ = integrity::validate_packet(packet)
                 .map_err(|e| {
                     hit_wo_fault(packet, context_buffer, payload_f);
                     println!("Data integrity failed due to {:?}", e);
                     e
                 });
-        }
-
-        #[cfg(user_bench)]
-        {
+        } else {
             let payload = integrity::build_payload(ALLOC_MEM - META_DATA_SIZE, payload_f);
 
             let packet_len = integrity::build_packet(&payload[..], context_buffer).expect("failed to create packet");
             let packet = &context_buffer[..packet_len];
-            
+
             unsafe { bench::rdma_bench(
-                bench::SPEC_RDMA_TYPE::RDMA_READ, 
-                alloc_mem, 
-                &mut qp, 
+                bench::SpecRdmaType::RdmaRead,
+                benchmark,
+                alloc_mem,
+                &mut qp,
                 &mut *mr,
                 &mut remote_mr,
                 &rdma_session.cq_send,

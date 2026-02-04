@@ -6,7 +6,6 @@ mod handshake;
 mod session;
 mod integrity;
 mod build_constants;
-//#[cfg(user_bench)]
 mod bench;
 
 extern crate alloc;
@@ -20,6 +19,8 @@ use alloc::{vec, vec::Vec};
 
 use runtime::*;
 use terminal::{println, print};
+
+use crate::bench::Benchmark;
 
 
 pub const ALLOC_MEM_XS: usize = 1000;
@@ -60,9 +61,12 @@ where
 
 #[unsafe(no_mangle)]
 pub fn main() {
-    #[cfg(read)]
-    rdma_read::invoke();
-
-    #[cfg(write)]
-    rdma_write::invoke();
+    // TODO add cmd args
+    let benchmark = Benchmark::Throughput;
+    let only_test = false;
+    if true {
+        rdma_read::invoke(benchmark, only_test);
+    } else {
+        rdma_write::invoke(benchmark, only_test);
+    }
 }
