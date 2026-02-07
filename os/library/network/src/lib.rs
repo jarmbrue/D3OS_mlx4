@@ -14,7 +14,6 @@ pub struct UdpSocket {
     address: SocketAddr,
 }
 
-
 #[derive(Debug)]
 #[repr(u8)]
 #[non_exhaustive]

@@ -1,5 +1,4 @@
 use super::{session, handshake, integrity};
-use crate::{bench::Benchmark, build_constants};
 use mm::{MmapFlags, mmap};
 use rdma_core::{
     devices, LocalMemoryRegion
@@ -11,9 +10,9 @@ use alloc::{vec};
 use cpu_core::{flush_cache};
 use core::arch::x86_64::{_mm_mfence};
 use concurrent::thread::sleep;
-use terminal::{println, print};
+use terminal::println;
 
-pub fn invoke(benchmark: Benchmark, only_test: bool) {
+pub fn invoke(config: RunConfig) {
     let min_cq_entries = 1000;
     let alloc_mem = ALLOC_MEM;
     let context_buffer = mmap(
@@ -46,13 +45,13 @@ pub fn invoke(benchmark: Benchmark, only_test: bool) {
     let pd = ctx.alloc_pd().expect("failed to allocate protection domain");
 
     let mut rdma_session = session::RdmaSession::new(&ctx, &pd, alloc_mem, min_cq_entries);
-    let udp_session  = session::UdpSession::new();
+    let udp_session  = session::UdpSession::new(config.target_ip, config.target_port);
 
     // sleep(1000); // give some time for the memory regions
 
     let payload_f = integrity::PAYLOAD_FUNCTIONS.lcg;
 
-    if build_constants::IS_SENDER {
+    if config.is_sender {
         println!("Starting as SENDER");
         let max_send_wr = 10;
         let max_send_sge = 1;
@@ -92,7 +91,7 @@ pub fn invoke(benchmark: Benchmark, only_test: bool) {
 
         println!("Performing RDMA read...");
 
-        if only_test {
+        if config.only_test {
             let result = unsafe { qp.rdma_read(
                 &mut remote_mr,
                 vec![0..alloc_mem as u64],
@@ -126,7 +125,7 @@ pub fn invoke(benchmark: Benchmark, only_test: bool) {
 
             unsafe { bench::rdma_bench(
                 bench::SpecRdmaType::RdmaRead,
-                benchmark,
+                config.benchmark,
                 alloc_mem,
                 &mut qp,
                 &mut *mr,

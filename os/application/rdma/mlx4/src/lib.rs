@@ -1,27 +1,24 @@
 #![no_std]
 
+mod bench;
+mod build_constants;
+mod handshake;
+mod integrity;
 mod rdma_read;
 mod rdma_write;
-mod handshake;
 mod session;
-mod integrity;
-mod build_constants;
-mod bench;
 
 extern crate alloc;
 
-use integrity::{MAGIC_HEADER, CHECKSUM_SIZE, build_packet, build_payload};
-use rdma_core::{
-    LocalMemoryRegion
-};
-use session::RdmaSession;
-use alloc::{vec, vec::Vec};
+use core::{error::Error, fmt::Result, net::Ipv4Addr};
 
-use runtime::*;
-use terminal::{println, print};
+use alloc::{string::String, vec::Vec};
+use integrity::{CHECKSUM_SIZE, MAGIC_HEADER, build_packet, build_payload};
+
+use runtime::{env::Args, *};
+use terminal::{print, println};
 
 use crate::bench::Benchmark;
-
 
 pub const ALLOC_MEM_XS: usize = 1000;
 pub const ALLOC_MEM_S: usize = 10000;
@@ -59,14 +56,63 @@ where
     println!("hit rate: {:.2}%", hit_rate);
 }
 
+#[derive(Debug)]
+enum RdamType {
+    Read,
+    Write,
+}
+
+#[derive(Debug)]
+struct RunConfig {
+    target_ip: Ipv4Addr,
+    target_port: u16,
+    benchmark: Benchmark,
+    rdma_type: RdamType,
+    only_test: bool,
+    is_sender: bool,
+}
+
+impl RunConfig {
+    fn parse_args(args: Args) -> Option<Self>{
+        let args: Vec<String> = args.collect();
+
+        if args.len() != 3 {
+            return None;
+        }
+
+        let mut config = Self {
+            target_ip: args[1].parse().ok()?,
+            target_port: args[2].parse().ok()?,
+            benchmark: Benchmark::Throughput,
+            rdma_type: RdamType::Read,
+            only_test: false,
+            is_sender: false,
+        };
+
+        for (i, arg) in args.iter().enumerate() {
+            println!("{}: {}", i, arg)
+        }
+
+        Some(config)
+    }
+}
+
 #[unsafe(no_mangle)]
 pub fn main() {
-    // TODO add cmd args
-    let benchmark = Benchmark::Throughput;
-    let only_test = false;
-    if true {
-        rdma_read::invoke(benchmark, only_test);
-    } else {
-        rdma_write::invoke(benchmark, only_test);
+    let config = match RunConfig::parse_args(env::args()) {
+        Some(config) => config,
+        None => {
+            println!("USAGE: rdma_test_mlx4 [OPTIONS] TARGET_IP TARGET_PORT");
+            return;
+        },
+    };
+
+    print!("{:?}", config);
+
+    /*
+    match config.rdma_type {
+        RdamType::Read => rdma_read::invoke(config),
+        RdamType::Write => rdma_write::invoke(config),
     }
+    */
 }

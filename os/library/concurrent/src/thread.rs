@@ -39,12 +39,12 @@ extern "sysv64" fn kickoff_user_thread(entry: extern "sysv64" fn()) {
 }
 
 pub fn create(entry: fn()) -> Option<Thread> {
-    let res = syscall(SystemCall::ThreadCreate, &[kickoff_user_thread as usize,
+    let res = syscall(SystemCall::ThreadCreate, &[kickoff_user_thread as *const () as usize,
         entry as usize,]);
     match res {
         Ok(id) => Some(Thread::new(id)),
         Err(_) => None,
-    }    
+    }
 }
 
 pub fn current() -> Option<Thread> {
@@ -52,7 +52,7 @@ pub fn current() -> Option<Thread> {
     match res {
         Ok(id) => Some(Thread::new(id)),
         Err(_) => None,
-    }    
+    }
 }
 
 #[allow(dead_code)]
@@ -75,7 +75,7 @@ pub fn count() -> usize {
         Ok(count) => count,
         Err(_) => 0,
     }
-    
+
 }
 
 pub fn start_application(name: &str, args: Vec<&str>) -> Option<Thread> {
@@ -85,5 +85,5 @@ pub fn start_application(name: &str, args: Vec<&str>) -> Option<Thread> {
     match res {
         Ok(id) => Some(Thread::new(id)),
         Err(_) => None,
-    }    
+    }
 }

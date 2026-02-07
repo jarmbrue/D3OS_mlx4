@@ -20,17 +20,17 @@ use rdma::uverbs_uapi::{TypeSize, UVERBS_CMD_CREATE_CQ, UVERBS_CMD_CREATE_QP, UV
 
 pub struct ibv_context_ops {
     pub poll_cq: Option<fn(
-        &ibv_cq, &mut [ibv_wc],
+        &ibv_cq<'_>, &mut [ibv_wc],
     ) -> Result<i32>>,
     /// This is unsafe because the sges contain raw addresses.
     // TODO: figure out a way to return the bad wr
     pub post_send: Option<unsafe fn(
-        &mut ibv_qp, &mut ibv_send_wr,
+        &mut ibv_qp<'_, '_>, &mut ibv_send_wr,
     ) -> Result<()>>,
     /// This is unsafe because the sges contain raw addresses.
     // TODO: figure out a way to return the bad wr
     pub post_recv: Option<unsafe fn(
-        &mut ibv_qp, &mut ibv_recv_wr,
+        &mut ibv_qp<'_, '_>, &mut ibv_recv_wr,
     ) -> Result<()>>,
 }
 
@@ -101,7 +101,7 @@ pub struct ibv_pd<'ctx> {
     context: &'ctx ibv_context,
 }
 
-pub struct ibv_srq {}
+// pub struct ibv_srq {}
 
 pub struct ibv_qp<'ctx, 'cq> {
     pub ops: &'ctx ibv_context_ops,
@@ -245,7 +245,7 @@ pub fn ibv_alloc_pd(context: &ibv_context) -> Result<ibv_pd<'_>> {
 
 /// Register a memory region
 pub fn ibv_reg_mr<'pd, T>(
-    pd: &'pd ibv_pd, data: &mut [T], access: ibv_access_flags,
+    pd: &'pd ibv_pd<'_>, data: &mut [T], access: ibv_access_flags,
 ) -> Result<ibv_mr<'pd>> {
     let data_u8 = data.as_mut_ptr().cast::<u8>();
 
@@ -290,7 +290,7 @@ pub fn ibv_reg_mr<'pd, T>(
 pub fn ibv_create_cq(
     context: &ibv_context, cqe: i32, cq_context: isize,
     channel: Option<()>, comp_vector: i32,
-) -> Result<ibv_cq> {
+) -> Result<ibv_cq<'_>> {
     assert!(channel.is_none());
     assert_eq!(comp_vector, 0);
 
@@ -315,7 +315,7 @@ pub fn ibv_create_cq(
 
 /// Create a queue pair.
 pub fn ibv_create_qp<'ctx, 'cq>(
-    pd: &'ctx ibv_pd, qp_init_attr: &mut ibv_qp_init_attr<'cq, 'ctx>,
+    pd: &'ctx ibv_pd<'_>, qp_init_attr: &mut ibv_qp_init_attr<'cq, 'ctx>,
 ) -> Result<ibv_qp<'ctx, 'cq>> {
     let send_cq = qp_init_attr.send_cq;
     let recv_cq = qp_init_attr.recv_cq;
@@ -351,7 +351,7 @@ pub fn ibv_create_qp<'ctx, 'cq>(
 
 /// Modify a queue pair.
 pub fn ibv_modify_qp(
-    qp: &mut ibv_qp, attr: &ibv_qp_attr, attr_mask: ibv_qp_attr_mask,
+    qp: &mut ibv_qp<'_, '_>, attr: &ibv_qp_attr, attr_mask: ibv_qp_attr_mask,
 ) -> Result<()> {
     let dev_fd = qp.recv_cq.context.lock();
 
@@ -395,7 +395,7 @@ fn ibv_poll_cq(
 
 /// post a list of work requests (WRs) to a send queue
 unsafe fn ibv_post_send(
-    qp: &mut ibv_qp, wr: &mut ibv_send_wr,
+    qp: &mut ibv_qp<'_, '_>, wr: &mut ibv_send_wr,
 ) -> Result<()> {
     let dev_fd = qp.send_cq.context.lock();
 
@@ -416,7 +416,7 @@ unsafe fn ibv_post_send(
 
 /// post a list of work requests (WRs) to a receive queue
 unsafe fn ibv_post_recv(
-    qp: &mut ibv_qp, wr: &mut ibv_recv_wr,
+    qp: &mut ibv_qp<'_, '_>, wr: &mut ibv_recv_wr,
 ) -> Result<()> {
     let dev_fd = qp.recv_cq.context.lock();
 

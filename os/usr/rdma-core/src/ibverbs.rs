@@ -62,7 +62,6 @@
 
 #![no_std]
 //#![deny(missing_docs)]
-#![warn(rust_2018_idioms)]
 // avoid warnings about RDMAmojo, iWARP, InfiniBand, etc. not being in backticks
 #![allow(clippy::doc_markdown)]
 

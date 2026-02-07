@@ -3,7 +3,6 @@ edition = "2024"
 name = "rdma_test_mlx4"
 version = "0.1.0"
 authors = [ "Sandro Jose Leal Miudo" ]
-build = "build.rs"
 
 [lib]
 crate-type = ["staticlib"]

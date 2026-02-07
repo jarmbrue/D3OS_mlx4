@@ -6,7 +6,7 @@ use cpu_core::flush_cache;
 use rdma::ibv_send_flags;
 use rdma_core::{CompletionQueue, LocalMemoryRegion, QueuePair, RemoteMemoryRegion};
 use spin::Once;
-use terminal::{print, println};
+use terminal::println;
 use time::get_time_in_us;
 
 const ITERATIONS: usize = 1000;
@@ -19,12 +19,13 @@ static REMOTE_RANGES: Once<[Vec<Range<u64>>; BATCHES]> = Once::new();
 static WORK_IDS: Once<[Vec<u64>; BATCHES]> = Once::new();
 static SEND_FLAGS: Once<[Vec<ibv_send_flags>; BATCHES]> = Once::new();
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum SpecRdmaType {
     RdmaRead,
     RdmaWrite,
 }
 
+#[derive(Copy, Clone, Debug)]
 pub enum Benchmark {
     Latency,
     Throughput,

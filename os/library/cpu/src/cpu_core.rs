@@ -1,6 +1,5 @@
 #![no_std]
 
-use raw_cpuid::CpuId;
 use core::arch::x86_64::{_mm_clflush, _mm_sfence};
 
 #[cfg(target_arch = "x86_64")]

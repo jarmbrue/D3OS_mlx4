@@ -1,12 +1,11 @@
 use rdma_core::*;
 use rdma_core::sliceindex::SliceIndex;
-use crate::build_constants;
 use smoltcp::wire::Ipv4Address;
 use rdma_core::{ibv_qp_type::Type, ibv_wc};
 use rdma::ibv_qp_cap;
 use core::ops;
 use core::slice::from_raw_parts_mut;
-use terminal::{println, print};
+use terminal::println;
 use net_core::{socket, bind, close, connect};
 use network::SocketType;
 use naming::{read, write};
@@ -113,21 +112,13 @@ impl<'ctx, 'pd> RdmaSession<'ctx, 'pd> {
 }
 
 impl UdpSession {
-    pub fn new() -> Self {
-        let tgt_port = build_constants::TARGET_PORT.parse::<u16>().unwrap();
+    pub fn new(target_ip: Ipv4Address, target_port: u16) -> Self {
         let src_port = 1324;
         let fd = socket(SocketType::Udp).expect("error while creating socket");
         bind(fd, src_port).expect("failed binding");
+        connect(fd, target_ip, target_port).expect("error while connecting");
 
-        let ip = build_constants::TARGET_IP.parse::<Ipv4Address>().unwrap();
-
-        println!("Target: {} ({})", build_constants::TARGET_HOST, ip);
-        println!("Local: {} ({})", build_constants::THIS_HOST,
-            build_constants::THIS_IP.parse::<Ipv4Address>().unwrap());
-
-        connect(fd, ip, tgt_port).expect("error while connecting");
-
-        Self { src_port, tgt_port, ip, fd }
+        Self { src_port, tgt_port: target_port, ip: target_ip, fd }
     }
 
     pub fn send(&self, buffer: &[u8]) -> SyscallResult {

@@ -1,8 +1,6 @@
 use super::bench;
 use super::*;
 use super::{handshake, integrity, session};
-use crate::bench::Benchmark;
-use crate::build_constants;
 use alloc::vec;
 use concurrent::thread::sleep;
 use core::{arch::x86_64::_mm_mfence};
@@ -10,7 +8,7 @@ use cpu_core::flush_cache;
 use rdma::ibv_send_flags;
 use rdma_core::devices;
 
-pub fn invoke(benchmark: Benchmark, only_test: bool) {
+pub fn invoke(config: RunConfig) {
     let min_cq_entries = 64;
     let alloc_mem = ALLOC_MEM;
     let mut context_buffer = [0u8; CONTEXT_BUFFER_SIZE];
@@ -36,13 +34,13 @@ pub fn invoke(benchmark: Benchmark, only_test: bool) {
     let pd = ctx.alloc_pd().expect("failed to allocate protection domain");
 
     let mut rdma_session = session::RdmaSession::new(&ctx, &pd, alloc_mem, min_cq_entries);
-    let udp_session  = session::UdpSession::new();
+    let udp_session  = session::UdpSession::new(config.target_ip, config.target_port);
 
     sleep(1000); // give some time for the memory regions
 
     let payload_f = integrity::PAYLOAD_FUNCTIONS.seq;
 
-    if build_constants::IS_SENDER {
+    if config.is_sender {
         println!("Starting as SENDER");
 
         let payload = integrity::build_payload(ALLOC_MEM - META_DATA_SIZE, payload_f);
@@ -91,7 +89,7 @@ pub fn invoke(benchmark: Benchmark, only_test: bool) {
 
         handshake::wait_ack(&udp_session);
 
-        if only_test {
+        if config.only_test {
             println!("Performing RDMA write...");
 
             let _result = unsafe { qp.rdma_write(
@@ -106,8 +104,9 @@ pub fn invoke(benchmark: Benchmark, only_test: bool) {
             session::RdmaSession::poll_cq::<10>(&rdma_session.cq_send, 1);
         } else {
             bench::rdma_bench(
+
                 bench::SpecRdmaType::RdmaWrite,
-                benchmark,
+                config.benchmark,
                 alloc_mem,
                 &mut qp,
                 &mut rdma_session.mr,
@@ -142,7 +141,7 @@ pub fn invoke(benchmark: Benchmark, only_test: bool) {
 
         handshake::wait_ack(&udp_session);
 
-        if only_test {
+        if config.only_test {
             println!("Checking data integrity...");
 
             unsafe { flush_cache(&rdma_session.mr) };
