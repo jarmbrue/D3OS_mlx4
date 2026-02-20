@@ -145,7 +145,7 @@ impl CompletionQueue {
     ///
     /// This is used by ibv_poll_cq.
     pub(super) fn poll(
-        &mut self, eqs: &mut [EventQueue], qps: &mut [QueuePair], doorbells: &mut [MappedPages], wc: &mut [ibv_wc],
+        &mut self, _eqs: &mut [EventQueue], qps: &mut [QueuePair], _doorbells: &mut [MappedPages], wc: &mut [ibv_wc],
     ) -> Result<usize, &'static str> {
         // the event queue should be polled async and not while polling here !!!
         // consider moving to seperate thread or impl. interrupts !

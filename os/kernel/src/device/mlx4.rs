@@ -17,7 +17,7 @@ mod utils;
 use alloc::vec::Vec;
 use cmd::CommandInterface;
 use completion_queue::CompletionQueue;
-use event_queue::{init_eqs, EventQueue};
+use event_queue::{EventQueue, init_eqs};
 use fw::{Capabilities, Hca, MappedFirmwareArea};
 use icm::MappedIcmTables;
 use log::trace;
@@ -42,6 +42,7 @@ use core::sync::atomic::Ordering::Relaxed;
 pub const MLX_VEND: u16 = 0x15b3;
 /// Device ID for the ConnectX-3 NIC
 pub const CONNECTX3_DEV: u16 = 0x1003;
+pub const NUM_SPECIAL_QP: u32 = 8;
 
 const DEVICE_END: usize = 10;
 const DEVICE_START: usize = 1;
@@ -76,12 +77,13 @@ pub fn get_dev_list() -> &'static Mutex<Vec<ConnectX3Nic>> {
 /// Struct representing a ConnectX-3 card
 pub struct ConnectX3Nic {
     config_regs: MappedPages,
+    cmd: CommandInterface,
     firmware: Firmware,
-    firmware_area: Option<MappedFirmwareArea>,
-    capabilities: Option<Capabilities>,
-    offsets: Option<Offsets>,
-    icm_tables: Option<MappedIcmTables>,
-    hca: Option<Hca>,
+    firmware_area: MappedFirmwareArea,
+    capabilities: Capabilities,
+    offsets: Offsets,
+    icm_tables: MappedIcmTables,
+    hca: Hca,
     doorbells: Vec<MappedPages>,
     blueflame: Vec<MappedPages>,
     eqs: Vec<EventQueue>,
@@ -127,58 +129,57 @@ impl ConnectX3Nic {
 
         mlx3_pci_dev.update_command(config_space, |creg| creg | CommandRegister::MEMORY_ENABLE | CommandRegister::BUS_MASTER_ENABLE);
 
+        // In linux driver ownership is taken before reset
         Ownership::get(&config_regs)?;
-        let mut command_interface = CommandInterface::new(&mut config_regs)?;
-        let firmware = Firmware::query(&mut command_interface)?;
-        let firmware_area = firmware.map_area(&mut command_interface)?;
-        let mut nic = Self {
-            config_regs,
-            firmware,
-            firmware_area: Some(firmware_area),
-            capabilities: None,
-            offsets: None,
-            icm_tables: None,
-            hca: None,
-            doorbells: Vec::new(),
-            blueflame: Vec::new(),
-            eqs: Vec::new(),
-            cqs: Vec::new(),
-            qps: Vec::new(),
-            ports: Vec::new(),
-            minor: 0,
-        };
-        let mut command_interface = CommandInterface::new(&mut nic.config_regs)?;
-        let firmware_area = nic.firmware_area.as_mut().unwrap();
-        firmware_area.run(&mut command_interface)?;
-        nic.capabilities = Some(firmware_area.repeat_query_capabilities(&mut command_interface)?);
-        let caps = nic.capabilities.as_ref().unwrap();
+        let mut cmd = CommandInterface::new(&mut config_regs)?;
+        let firmware = Firmware::query(&mut cmd)?;
+        let mut firmware_area = firmware.map_area(&mut cmd)?;
+        firmware_area.run(&mut cmd)?;
+        let capabilities = firmware_area.repeat_query_capabilities(&mut cmd)?;
 
         // In the Nautilus driver, some of the port setup already happens here.
 
-        nic.offsets = Some(Offsets::init(caps));
-        let offsets = nic.offsets.as_mut().unwrap();
-        let mut profile = Profile::new(caps)?;
-        let aux_pages = firmware_area.set_icm(&mut command_interface, profile.total_size)?;
-        let icm_aux_area = firmware_area.map_icm_aux(&mut command_interface, aux_pages)?;
-        nic.icm_tables = Some(icm_aux_area.map_icm_tables(&mut command_interface, &profile, caps)?);
-        nic.hca = Some(profile.init_hca.init_hca(&mut command_interface)?);
-        let hca = nic.hca.as_ref().unwrap();
+        let mut offsets = Offsets::init(&capabilities);
+        let mut profile = Profile::new(&capabilities)?;
+        let aux_pages = firmware_area.set_icm(&mut cmd, profile.total_size)?;
+        let icm_aux_area = firmware_area.map_icm_aux(&mut cmd, aux_pages)?;
+        let mut icm_tables = icm_aux_area.map_icm_tables(&mut cmd, &profile, &capabilities)?;
+        let hca = profile.init_hca.init_hca(&mut cmd)?;
 
         // give us the interrupt pin
-        hca.query_adapter(&mut command_interface)?;
-        let memory_regions = nic.icm_tables.as_mut().unwrap().memory_regions();
+        hca.query_adapter(&mut cmd)?;
 
         // get the doorbells and the BlueFlame section
-        (nic.doorbells, nic.blueflame) = caps.get_doorbells_and_blueflame(user_access_region)?;
-        nic.eqs = init_eqs(&mut command_interface, &mut nic.doorbells, caps, offsets, memory_regions)?;
+        let (mut doorbells, blueflame) = capabilities.get_doorbells_and_blueflame(user_access_region)?;
+        let eqs = init_eqs(&mut cmd, &mut doorbells, &capabilities, &mut offsets, icm_tables.memory_regions())?;
 
-        // In the Nautilus driver, CQs and QPs are already allocated here.
+        hca.config_mad_demux(&mut cmd, &capabilities)?;
 
-        hca.config_mad_demux(&mut command_interface, &caps)?;
-        nic.ports = hca.init_ports(&mut command_interface, &caps)?;
+        // TODO: Configure Special QPs (QP0, QP1) for SMI and GSI MAD packets
+        //       before initializing the ports
+        //let _: () = cmd.execute_command(cmd::Opcode::ConfSpecialQp, (), (), offsets.base_qpn)?;
+
+        let ports = hca.init_ports(&mut cmd, &capabilities, offsets.base_qpn)?;
 
         let minor = next_minor();
-        nic.minor = minor;
+
+        let nic = Self {
+            cmd,
+            config_regs,
+            firmware,
+            firmware_area,
+            capabilities,
+            offsets,
+            icm_tables,
+            hca,
+            doorbells,
+            blueflame,
+            eqs,
+            cqs: Vec::new(),
+            qps: Vec::new(),
+            ports,
+            minor,
+        };
         get_dev_list().lock().push(nic);
         Ok(minor)
     }
@@ -197,10 +198,9 @@ impl ConnectX3Nic {
     ///
     /// This is used by ibv_query_port.
     pub fn query_port(&mut self, port_num: u8) -> Result<ibv_port_attr, &'static str> {
-        let mut cmd = CommandInterface::new(&mut self.config_regs)?;
         let port: Option<&mut Port> = self.ports.get_mut(port_num as usize - 1);
         if let Some(port) = port {
-            port.query(&mut cmd)
+            port.query(&mut self.cmd)
         } else {
             Err("port does not exist")
         }
@@ -210,18 +210,17 @@ impl ConnectX3Nic {
     ///
     /// This is used by ibv_create_cq.
     pub fn create_cq(&mut self, min_num_entries: i32) -> Result<u32, &'static str> {
-        let memory_regions = self.icm_tables.as_mut().unwrap().memory_regions();
-        let mut cmd = CommandInterface::new(&mut self.config_regs)?;
+        // TODO min_num_entries should be u32
         let mut cq = CompletionQueue::new(
-            &mut cmd,
-            self.capabilities.as_ref().unwrap(),
-            self.offsets.as_mut().unwrap(),
-            memory_regions,
+            &mut self.cmd,
+            &mut self.capabilities,
+            &mut self.offsets,
+            self.icm_tables.memory_regions(),
             self.eqs.get(0),
             min_num_entries.try_into().unwrap(),
         )?;
         cq.arm(&mut self.doorbells)?;
-        cq.query(&mut cmd)?;
+        cq.query(&mut self.cmd)?;
         let number = cq.number();
         self.cqs.push(cq);
         Ok(number)
@@ -244,8 +243,7 @@ impl ConnectX3Nic {
             .find(|(_, cq)| cq.number() == number)
             .ok_or("completion queue not found")?;
         let cq = self.cqs.remove(index);
-        let mut cmd = CommandInterface::new(&mut self.config_regs)?;
-        cq.destroy(&mut cmd)?;
+        cq.destroy(&mut self.cmd)?;
         Ok(())
     }
 
@@ -255,8 +253,6 @@ impl ConnectX3Nic {
     pub fn create_qp(
         &mut self, qp_type: ibv_qp_type::Type, send_cq_number: u32, receive_cq_number: u32, ib_caps: &mut ibv_qp_cap,
     ) -> Result<u32, &'static str> {
-        let memory_regions = self.icm_tables.as_mut().unwrap().memory_regions();
-        let mut cmd = CommandInterface::new(&mut self.config_regs)?;
         let send_cq = self
             .cqs
             .iter()
@@ -268,10 +264,10 @@ impl ConnectX3Nic {
             .find(|cq| cq.number() == receive_cq_number)
             .ok_or("invalid receive completion queue number")?;
         let qp = QueuePair::new(
-            &mut cmd,
-            self.capabilities.as_ref().unwrap(),
-            self.offsets.as_mut().unwrap(),
-            memory_regions,
+            &mut self.cmd,
+            &mut self.capabilities,
+            &mut self.offsets,
+            self.icm_tables.memory_regions(),
             qp_type,
             send_cq,
             receive_cq,
@@ -287,8 +283,7 @@ impl ConnectX3Nic {
     /// This is used by ibv_modify_qp.
     pub fn modify_qp(&mut self, number: u32, attr: &ibv_qp_attr, attr_mask: ibv_qp_attr_mask) -> Result<(), &'static str> {
         let qp = self.qps.iter_mut().find(|qp| qp.number() == number).ok_or("invalid queue pair number")?;
-        let mut cmd = CommandInterface::new(&mut self.config_regs)?;
-        qp.modify(&mut cmd, self.capabilities.as_ref().unwrap(), attr, attr_mask)
+        qp.modify(&mut self.cmd, &mut self.capabilities, attr, attr_mask)
     }
 
     /// Destroy a queue pair.
@@ -300,8 +295,7 @@ impl ConnectX3Nic {
             .find(|(_, qp)| qp.number() == number)
             .ok_or("queue pair not found")?;
         let qp = self.qps.remove(index);
-        let mut cmd = CommandInterface::new(&mut self.config_regs)?;
-        qp.destroy(&mut cmd, self.capabilities.as_ref().unwrap())?;
+        qp.destroy(&mut self.cmd, &mut self.capabilities)?;
         Ok(())
     }
 
@@ -319,7 +313,7 @@ impl ConnectX3Nic {
     pub fn post_send(&mut self, qp_number: u32, wr: &mut ibv_send_wr) -> Result<(), &'static str> {
         let qp = self.qps.iter_mut().find(|qp| qp.number() == qp_number).ok_or("invalid queue pair number")?;
         // TODO: check if blue flame is available
-        qp.post_send(self.capabilities.as_ref().unwrap(), &mut self.doorbells, Some(&mut self.blueflame), wr)
+        qp.post_send(&mut self.capabilities, &mut self.doorbells, Some(&mut self.blueflame), wr)
     }
 
     /// Create a memory region and return its index, physical address, lkey and rkey.
@@ -327,12 +321,10 @@ impl ConnectX3Nic {
     /// This is used by ibv_reg_mr.
     pub fn create_mr<T>(&mut self, data: &mut [T], access: ibv_access_flags) -> Result<(u32, usize, u32, u32), &'static str> {
         // TODO: this fails for large memory regions (>= 64 MB)
-        let memory_regions = self.icm_tables.as_mut().unwrap().memory_regions();
-        let mut cmd = CommandInterface::new(&mut self.config_regs)?;
-        memory_regions.alloc_dmpt(
-            &mut cmd,
-            self.capabilities.as_ref().unwrap(),
-            self.offsets.as_mut().unwrap(),
+        self.icm_tables.memory_regions().alloc_dmpt(
+            &mut self.cmd,
+            &mut self.capabilities,
+            &mut self.offsets,
             data,
             None,
             access,
@@ -341,43 +333,33 @@ impl ConnectX3Nic {
 
     /// Destroy a memory region.
     pub fn destroy_mr(&mut self, index: u32) -> Result<(), &'static str> {
-        let memory_regions = self.icm_tables.as_mut().unwrap().memory_regions();
-        let mut cmd = CommandInterface::new(&mut self.config_regs)?;
-        memory_regions.destroy(&mut cmd, index)
+        self.icm_tables.memory_regions().destroy(&mut self.cmd, index)
     }
 }
 
 impl Drop for ConnectX3Nic {
     fn drop(&mut self) {
-        let mut cmd = CommandInterface::new(&mut self.config_regs).expect("failed to get command interface");
-        if let Some(icm_tables) = self.icm_tables.as_mut() {
-            icm_tables.memory_regions().destroy_all(&mut cmd).unwrap()
-        }
+        self.icm_tables.memory_regions().destroy_all(&mut self.cmd).unwrap();
         while let Some(qp) = self.qps.pop() {
-            qp.destroy(&mut cmd, self.capabilities.as_ref().unwrap()).unwrap()
+            qp.destroy(&mut self.cmd, &mut self.capabilities).unwrap()
         }
         while let Some(cq) = self.cqs.pop() {
-            cq.destroy(&mut cmd).unwrap()
+            cq.destroy(&mut self.cmd).unwrap()
         }
         while let Some(port) = self.ports.pop() {
-            port.close(&mut cmd).unwrap()
+            port.close(&mut self.cmd).unwrap()
         }
         while let Some(eq) = self.eqs.pop() {
-            eq.destroy(&mut cmd).unwrap()
+            eq.destroy(&mut self.cmd).unwrap()
         }
-        if let Some(hca) = self.hca.take() {
-            hca.close(&mut cmd).unwrap()
-        }
-        if let Some(icm_tables) = self.icm_tables.take() {
-            icm_tables.unmap(&mut cmd).unwrap()
-        }
-        if let Some(firmware_area) = self.firmware_area.take() {
-            firmware_area.unmap(&mut cmd).unwrap()
-        }
+        self.hca.close(&mut self.cmd).unwrap();
+        self.icm_tables.unmap(&mut self.cmd).unwrap();
+        self.firmware_area.unmap(&mut self.cmd).unwrap();
     }
 }
 
 struct Offsets {
+    base_qpn: u32,
     next_cqn: usize,
     next_qpn: usize,
     next_dmpt: usize,
@@ -391,9 +373,13 @@ struct Offsets {
 impl Offsets {
     /// Initialize the queue offsets.
     pub(in crate::device::mlx4) fn init(caps: &Capabilities) -> Self {
+        let end_reserved_cpn: u32 = 1 << caps.log2_rsvd_cqs();
+        // Reserve numbers for special qp. Base_qpn must be naturally aliged
+        let base_qpn = end_reserved_cpn.next_multiple_of(NUM_SPECIAL_QP);
         Self {
+            base_qpn,
             // This should return the first non reserved cq, qp, eq number.
-            next_cqn: 1 << caps.log2_rsvd_cqs(),
+            next_cqn: (base_qpn + NUM_SPECIAL_QP) as usize,
             next_qpn: 1 << caps.log2_rsvd_qps(),
             next_dmpt: 1 << caps.log2_rsvd_mrws(),
             next_eqn: caps.num_rsvd_eqs().into(),

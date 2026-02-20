@@ -5,15 +5,14 @@ use core::{
 };
 use modular_bitfield_msb::{
     bitfield,
-    prelude::{B11, B28, B3, B5, B60, B84},
-    specifiers::{B2, B4, B48, B9},
+    prelude::{B3, B5, B11, B28, B60, B84},
+    specifiers::{B2, B4, B9, B48},
 };
-use rdma::{ibv_mtu, ibv_port_attr, ibv_port_state, PhysicalPortState};
+use rdma::{PhysicalPortState, ibv_mtu, ibv_port_attr, ibv_port_state};
 use zerocopy::{AsBytes, FromBytes, U16, U32, U64};
-
 use super::cmd::{CommandInterface, MadIfcOpcodeModifier, Opcode, SetPortOpcodeModifier};
 use super::utils::MappedPages;
-use log::{trace, warn};
+use log::{debug, trace, warn};
 
 #[derive(Debug)]
 pub struct Port {
@@ -21,10 +20,14 @@ pub struct Port {
     open: bool,
     capabilities: Option<PortCapabilities>,
     madifc_output: Option<MadPacket>,
+    smi_qpn: u32,
+    gsi_qpn: u32,
 }
 
 impl Port {
-    pub(super) fn new(cmd: &mut CommandInterface, number: u8, mtu: ibv_mtu, pkey_table_size: Option<u16>) -> Result<Self, &'static str> {
+    pub(super) fn new(
+        cmd: &mut CommandInterface, number: u8, smi_qpn: u32, gsi_qpn: u32, mtu: ibv_mtu, pkey_table_size: Option<u16>,
+    ) -> Result<Self, &'static str> {
         trace!("initializing port {number}...");
         // create the struct
         let mut port = Self {
@@ -32,6 +35,8 @@ impl Port {
             open: false,
             capabilities: None,
             madifc_output: None,
+            smi_qpn,
+            gsi_qpn,
         };
         // then, get all port capabilities
         let port_attr = port.query(cmd)?;

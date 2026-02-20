@@ -176,7 +176,7 @@ impl MappedFirmwareArea {
     }
 
     /// Unmaps the area from the card. Further usage requires a software reset.
-    pub(super) fn unmap(mut self, cmd: &mut CommandInterface) -> Result<(), &'static str> {
+    pub(super) fn unmap(&mut self, cmd: &mut CommandInterface) -> Result<(), &'static str> {
         if let Some(icm_aux_area) = self.icm_aux_area.take() {
             icm_aux_area.unmap(cmd).unwrap()
         }
@@ -523,12 +523,14 @@ pub(super) struct Capabilities {
     #[skip]
     __: u8,
     #[skip(setters)]
+    //The maximum scatter/gather list elements in an SQ WGE
     pub(super) max_sg_sq: u8,
     #[skip(setters)]
     pub(super) max_desc_sz_sq: u16,
     #[skip]
     __: u8,
     #[skip(setters)]
+    //The maximum scatter/gather list elements in an RQ or SRQ WGE
     pub(super) max_sg_rq: u8,
     #[skip(setters)]
     max_desc_sz_rq: u16,
@@ -1166,7 +1168,7 @@ pub(super) struct Hca {
 }
 
 impl Hca {
-    pub(super) fn close(mut self, cmd: &mut CommandInterface) -> Result<(), &'static str> {
+    pub(super) fn close(&mut self, cmd: &mut CommandInterface) -> Result<(), &'static str> {
         trace!("Closing HCA...");
         let _: () = cmd.execute_command(Opcode::CloseHca, (), (), 0)?;
         self.initialized = false;
@@ -1196,10 +1198,19 @@ impl Hca {
         Ok(())
     }
 
-    pub(crate) fn init_ports(&self, cmd: &mut CommandInterface, caps: &Capabilities) -> Result<Vec<Port>, &'static str> {
+    pub(crate) fn init_ports(&self, cmd: &mut CommandInterface, caps: &Capabilities, base_qpn: u32) -> Result<Vec<Port>, &'static str> {
+        assert!(caps.num_ports() <= 2);
         let mut ports = Vec::with_capacity(caps.num_ports().into());
-        for number in 1..=caps.num_ports() {
-            let port = Port::new(cmd, number, ibv_mtu::Mtu4096, None)?;
+        // Special QP Number offsets from base_qpn
+        // 000 QP0 port 1 (SMI)
+        // 001 QP0 port 2 (SMI)
+        // 010 QP1 port 1 (GSI)
+        // 011 QP1 port 2 (GSI)
+        // 100 - 111 reserved
+        for port_num in 1..=caps.num_ports() {
+            let smi_qpn = base_qpn + 0 + port_num as u32 - 1;
+            let gsi_qpn = base_qpn + 2 + port_num as u32 - 1;
+            let port = Port::new(cmd, port_num, smi_qpn, gsi_qpn, ibv_mtu::Mtu4096, None)?;
             ports.push(port);
         }
         Ok(ports)

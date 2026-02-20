@@ -625,7 +625,7 @@ pub(super) struct MappedIcmTables {
 
 impl MappedIcmTables {
     /// Unmaps the area from the card.
-    pub(super) fn unmap(mut self, cmd: &mut CommandInterface) -> Result<(), &'static str> {
+    pub(super) fn unmap(&mut self, cmd: &mut CommandInterface) -> Result<(), &'static str> {
         trace!("unmapping ICM tables...");
         if let Some(eq_table) = self.eq_table.take() {
             eq_table.table.unmap(cmd)?;

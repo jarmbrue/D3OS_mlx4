@@ -152,8 +152,8 @@ impl OpcodeModifier for SetPortOpcodeModifier {
     }
 }
 
-pub(super) struct CommandInterface<'a> {
-    hcr: &'a mut Hcr,
+pub(super) struct CommandInterface {
+    hcr: &'static mut Hcr,
     exp_toggle: u32,
 }
 
@@ -305,9 +305,10 @@ impl OutputParameter for utils::MappedPages {
     }
 }
 
-impl<'a> CommandInterface<'a> {
-    pub(super) fn new(config_regs: &'a mut utils::MappedPages) -> Result<Self, &'static str> {
-        let hcr = config_regs.as_type_mut::<Hcr>(HCR_BASE)?;
+impl CommandInterface {
+    pub(super) fn new(config_regs: &mut utils::MappedPages) -> Result<Self, &'static str> {
+        let hcr_ptr = config_regs.as_type_mut::<Hcr>(HCR_BASE)? as *mut Hcr;
+        let hcr = unsafe { &mut *hcr_ptr };
 
         Ok(Self { hcr, exp_toggle: 1 })
     }
@@ -346,7 +347,6 @@ impl<'a> CommandInterface<'a> {
             0
         };
         // post the command
-        let ptr = self.hcr as *mut Hcr as *mut u32;
         self.hcr.in_param_h.set(((input_param >> 32) as u32).to_be());
         self.hcr.in_param_l.set((input_param as u32).to_be());
         self.hcr.in_mod.set(input_modifier.to_be());
@@ -386,6 +386,7 @@ impl<'a> CommandInterface<'a> {
         let status = u32::from_be(self.hcr.status_opcode.get());
         status & (1 << HCR_GO_BIT) != 0 || (status & (1 << HCR_T_BIT)) == self.exp_toggle
     }
+
 }
 
 #[repr(u32)]
