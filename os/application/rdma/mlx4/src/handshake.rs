@@ -1,24 +1,24 @@
-use super::session::UdpSession;
 use bincode::{config::standard, decode_from_slice, encode_into_slice};
 use concurrent::thread::sleep;
 use ibverbs::{QueuePairEndpoint, RemoteMemoryRegion};
+use network::TcpStream;
 use terminal::{println};
 
 const READY_MSG: [u8; 10] = *b"READYHERE!";
 const ACK: [u8; 6] = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
 
-pub fn send_ready_and_wait_ack(session: &UdpSession, retry_interval_ms: usize, max_wait_ms: usize) {
+pub fn send_ready_and_wait_ack(session: &TcpStream, retry_interval_ms: usize, max_wait_ms: usize) {
     let mut ack_buf = [0u8; 6];
     let mut ack_received = false;
     loop {
-        session.send(&READY_MSG[..]).expect("failed to send READY message");
+        session.write(&READY_MSG[..]).expect("failed to send READY message");
 
         println!("READY message sent to receiver");
 
         let mut elapsed = 0;
 
         while elapsed < max_wait_ms {
-            match session.recv(&mut ack_buf) {
+            match session.read(&mut ack_buf) {
                 Ok(n) if n == ACK.len() && ack_buf == ACK => {
                     println!("Received ACK from receiver, ready to send data");
                     ack_received = true;
@@ -42,16 +42,16 @@ pub fn send_ready_and_wait_ack(session: &UdpSession, retry_interval_ms: usize, m
     }
 }
 
-pub fn send_ack(session: &UdpSession) {
+pub fn send_ack(session: &TcpStream) {
     let ack_buf = ACK;
-    session.send(&ack_buf[..]).expect("failed to send ACK");
+    session.write(&ack_buf[..]).expect("failed to send ACK");
     println!("ACK sent to sender");
 }
 
-pub fn wait_ack(session: &UdpSession) {
+pub fn wait_ack(session: &TcpStream) {
     let mut ack_buf = [0u8; 6];
     loop {
-        match session.recv(&mut ack_buf) {
+        match session.read(&mut ack_buf) {
             Ok(n) if n == ACK.len() && ack_buf == ACK => {
                 println!("Received ACK, handshake complete");
                 break;
@@ -66,11 +66,11 @@ pub fn wait_ack(session: &UdpSession) {
     }
 }
 
-pub fn wait_ready(session: &UdpSession) {
+pub fn wait_ready(session: &TcpStream) {
     println!("Waiting for READY message...");
     let mut buffer = [0u8; 1024];
     loop {
-        match session.recv(&mut buffer) {
+        match session.read(&mut buffer) {
             Ok(n) if n == READY_MSG.len() && buffer[..n] == READY_MSG[..] => {
                 println!("Received READY message from sender");
                 break;
@@ -85,21 +85,21 @@ pub fn wait_ready(session: &UdpSession) {
     }
 }
 
-pub fn exchange_endpoints(session: &UdpSession, local_ep: QueuePairEndpoint) -> QueuePairEndpoint {
+pub fn exchange_endpoints(session: &TcpStream, local_ep: QueuePairEndpoint) -> QueuePairEndpoint {
     let config = standard().with_big_endian().with_fixed_int_encoding().with_limit::<1024>();
 
     let mut buf = [0u8; 1024];
     let used = encode_into_slice(local_ep, &mut buf, config).unwrap();
 
-    println!("Sending endpoint ({} bytes) to {}:{}", used, session.ip, session.tgt_port);
-    match session.send(&buf[..used]) {
+    println!("Sending endpoint ({} bytes) to {}:{}", used, session.peer_address().ip(), session.peer_address().port());
+    match session.write(&buf[..used]) {
         Ok(_) => println!("Endpoint sent successfully"),
         Err(e) => println!("Failed to send endpoint: {:?}", e),
     }
 
     println!("Waiting for remote endpoint...");
     let size = loop {
-        match session.recv(&mut buf[..]) {
+        match session.read(&mut buf[..]) {
             Ok(n) => {
                 println!("Received {} bytes for endpoint", n);
                 break n;
@@ -115,20 +115,20 @@ pub fn exchange_endpoints(session: &UdpSession, local_ep: QueuePairEndpoint) -> 
     remote_ep
 }
 
-pub fn exchange_memory_region(session: &UdpSession, local_mr: RemoteMemoryRegion<u8>) -> RemoteMemoryRegion<u8> {
+pub fn exchange_memory_region(session: &TcpStream, local_mr: RemoteMemoryRegion<u8>) -> RemoteMemoryRegion<u8> {
     let config = standard().with_big_endian().with_fixed_int_encoding().with_limit::<1024>();
 
     let mut buf = [0u8; 1024];
     let used = encode_into_slice(local_mr, &mut buf, config).unwrap();
-    println!("Sending memory region ({} bytes) to {}:{}", used, session.ip, session.tgt_port);
-    match session.send(&buf[..used]) {
+    println!("Sending memory region ({} bytes) to {}:{}", used, session.peer_address().ip(), session.peer_address().port());
+    match session.write(&buf[..used]) {
         Ok(_) => println!("Memory region sent successfully"),
         Err(e) => println!("Failed to send memory region: {:?}", e),
     }
 
     println!("Waiting for remote memory region...");
     let size = loop {
-        match session.recv(&mut buf) {
+        match session.read(&mut buf) {
             Ok(n) => {
                 println!("Received {} bytes for memory region", n);
                 break n;

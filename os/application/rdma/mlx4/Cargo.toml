@@ -19,7 +19,6 @@ concurrent = { path = "../../../library/concurrent" }
 cpu_core = { package = "cpu-core", path = "../../../library/cpu" }
 naming = { path = "../../../library/naming" }
 syscall = { path = "../../../library/syscall" }
-net_core = { package = "net-core", path = "../../../usr/net-core" }
 mm = { path = "../../../library/mm" }
 
 # External dependencies

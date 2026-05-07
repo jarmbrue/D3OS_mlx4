@@ -1,15 +1,10 @@
 use ibverbs::{Context, ProtectionDomain, LocalMemoryRegion, CompletionQueue, QueuePairBuilder};
 use ibverbs::sliceindex::SliceIndex;
-use smoltcp::wire::Ipv4Address;
 use ibverbs::{ibv_qp_type::Type, ibv_wc};
 use rdma::ibv_qp_cap;
 use core::ops;
 use core::slice::from_raw_parts_mut;
 use terminal::println;
-use net_core::{socket, bind, close, connect};
-use network::SocketType;
-use naming::{read, write};
-use syscall::return_vals::{SyscallResult};
 
 pub struct RdmaSession<'ctx, 'pd> {
     pub ctx: &'ctx Context,
@@ -17,13 +12,6 @@ pub struct RdmaSession<'ctx, 'pd> {
     pub mr: LocalMemoryRegion<'pd, u8>,
     pub cq_send: CompletionQueue<'ctx>,
     pub cq_recv: CompletionQueue<'ctx>,
-}
-
-pub struct UdpSession {
-    pub src_port: u16,
-    pub tgt_port: u16,
-    pub ip: Ipv4Address,
-    pub fd: usize
 }
 
 impl<'ctx, 'pd> RdmaSession<'ctx, 'pd> {
@@ -108,28 +96,5 @@ impl<'ctx, 'pd> RdmaSession<'ctx, 'pd> {
     pub fn write(local_mr: *mut LocalMemoryRegion<'pd, u8>, packet: &[u8], local_range: ops::Range<usize>) {
         let data_range = unsafe { from_raw_parts_mut((*local_mr).as_mut_ptr().add(local_range.start), local_range.end - local_range.start) };
         data_range.copy_from_slice(packet);
-    }
-}
-
-impl UdpSession {
-    pub fn new(target_ip: Ipv4Address, target_port: u16) -> Self {
-        let src_port = 1324;
-        let fd = socket(SocketType::Udp).expect("error while creating socket");
-        bind(fd, src_port).expect("failed binding");
-        connect(fd, target_ip, target_port).expect("error while connecting");
-
-        Self { src_port, tgt_port: target_port, ip: target_ip, fd }
-    }
-
-    pub fn send(&self, buffer: &[u8]) -> SyscallResult {
-        write(self.fd, buffer)
-    }
-
-    pub fn recv(&self, buffer: &mut [u8]) -> SyscallResult {
-        read(self.fd, buffer)
-    }
-
-    pub fn terminate(self) {
-        close(self.fd).expect("error while closing");
     }
 }

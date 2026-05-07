@@ -9,7 +9,7 @@ mod session;
 
 extern crate alloc;
 
-use core::{error::Error, fmt::Result, net::Ipv4Addr};
+use core::net::Ipv4Addr;
 
 use alloc::{string::String, vec::Vec};
 use integrity::{CHECKSUM_SIZE, MAGIC_HEADER, build_packet, build_payload};

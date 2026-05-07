@@ -122,6 +122,7 @@ impl Drop for ibv_qp<'_, '_> {
     }
 }
 
+#[allow(dead_code)]
 pub struct ibv_qp_init_attr<'cq, 'ctx> {
     pub qp_context: isize,
     pub send_cq: &'cq ibv_cq<'ctx>,

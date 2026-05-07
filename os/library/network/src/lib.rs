@@ -242,6 +242,10 @@ impl TcpStream {
 
         Ok(num_bytes)
     }
+
+    pub fn peer_address(&self) -> SocketAddr {
+        return self.peer_address;
+    }
 }
 
 impl Drop for TcpStream {

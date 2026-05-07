@@ -3,6 +3,7 @@ use super::*;
 use super::{handshake, integrity, session};
 use alloc::vec;
 use concurrent::thread::sleep;
+use core::net::SocketAddr;
 use core::{arch::x86_64::_mm_mfence};
 use cpu_core::flush_cache;
 use rdma::ibv_send_flags;
@@ -34,7 +35,7 @@ pub fn invoke(config: RunConfig) {
     let pd = ctx.alloc_pd().expect("failed to allocate protection domain");
 
     let mut rdma_session = session::RdmaSession::new(&ctx, &pd, alloc_mem, min_cq_entries);
-    let udp_session  = session::UdpSession::new(config.target_ip, config.target_port);
+    let tcp_stream  = network::TcpStream::connect(SocketAddr::new(core::net::IpAddr::V4(config.target_ip), config.target_port)).unwrap();
 
     sleep(1000); // give some time for the memory regions
 
@@ -72,22 +73,22 @@ pub fn invoke(config: RunConfig) {
         .build()
         .expect("build of allocated QP was not successful");
 
-        handshake::wait_ready(&udp_session);
-        handshake::send_ack(&udp_session);
+        handshake::wait_ready(&tcp_stream);
+        handshake::send_ack(&tcp_stream);
 
         let endpoint = allocated_qp.endpoint();
         let local_mr = rdma_session.mr.remote();
 
-        let remote_qp_endpoint = handshake::exchange_endpoints(&udp_session, endpoint);
+        let remote_qp_endpoint = handshake::exchange_endpoints(&tcp_stream, endpoint);
         println!("Successfully received remote endpoint : {:?}", remote_qp_endpoint);
 
-        let mut remote_mr = handshake::exchange_memory_region(&udp_session, local_mr);
+        let mut remote_mr = handshake::exchange_memory_region(&tcp_stream, local_mr);
         println!("Successfully received remote memory region");
         println!("Remote memory region\n: {:?}", remote_mr);
 
         let mut qp = allocated_qp.handshake(remote_qp_endpoint).expect("failed handshake");
 
-        handshake::wait_ack(&udp_session);
+        handshake::wait_ack(&tcp_stream);
 
         if config.only_test {
             println!("Performing RDMA write...");
@@ -116,30 +117,30 @@ pub fn invoke(config: RunConfig) {
             );
         }
 
-        handshake::send_ack(&udp_session);
+        handshake::send_ack(&tcp_stream);
     } else {
         println!("Starting as RECEIVER");
         let allocated_qp = session::RdmaSession::create_qp(rdma_session.pd, &rdma_session.cq_send, &rdma_session.cq_recv, true, 0, 0, 0, 0)
             .build()
             .expect("build of allocated QP was not successful");
 
-        handshake::send_ready_and_wait_ack(&udp_session, 10, 3000);
+        handshake::send_ready_and_wait_ack(&tcp_stream, 10, 3000);
 
         let endpoint = allocated_qp.endpoint();
         let local_mr = rdma_session.mr.remote();
 
-        let remote_qp_endpoint = handshake::exchange_endpoints(&udp_session, endpoint);
+        let remote_qp_endpoint = handshake::exchange_endpoints(&tcp_stream, endpoint);
         println!("Successfully received remote endpoint : {:?}", remote_qp_endpoint);
 
-        let _remote_mr = handshake::exchange_memory_region(&udp_session, local_mr);
+        let _remote_mr = handshake::exchange_memory_region(&tcp_stream, local_mr);
 
         let _qp = allocated_qp.handshake(remote_qp_endpoint).expect("failed handshake");
 
-        handshake::send_ack(&udp_session);
+        handshake::send_ack(&tcp_stream);
 
         println!("Receiver finished sending data");
 
-        handshake::wait_ack(&udp_session);
+        handshake::wait_ack(&tcp_stream);
 
         if config.only_test {
             println!("Checking data integrity...");
@@ -172,6 +173,4 @@ pub fn invoke(config: RunConfig) {
         println!("end - rdma write")
         //loop {}
     }
-
-    udp_session.terminate();
 }

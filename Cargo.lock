@@ -997,16 +997,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "net-core"
-version = "0.1.0"
-dependencies = [
- "naming",
- "network",
- "smoltcp",
- "syscall",
-]
-
-[[package]]
 name = "network"
 version = "0.1.0"
 dependencies = [
@@ -1359,7 +1349,6 @@ dependencies = [
  "ibverbs",
  "mm",
  "naming",
- "net-core",
  "network",
  "rdma",
  "runtime",
