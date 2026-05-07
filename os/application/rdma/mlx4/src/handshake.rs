@@ -1,7 +1,7 @@
 use super::session::UdpSession;
 use bincode::{config::standard, decode_from_slice, encode_into_slice};
 use concurrent::thread::sleep;
-use rdma_core::{QueuePairEndpoint, RemoteMemoryRegion};
+use ibverbs::{QueuePairEndpoint, RemoteMemoryRegion};
 use terminal::{println};
 
 const READY_MSG: [u8; 10] = *b"READYHERE!";

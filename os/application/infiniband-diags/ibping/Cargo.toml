@@ -2,7 +2,7 @@
 edition = "2024"
 name = "ibping"
 version = "0.1.0"
-authors = [ "Sandro Jose Leal Miudo" ]
+authors = [ "Sandro Jose Leal Miudo", "Julius Armbruester"]
 
 [lib]
 crate-type = ["staticlib"]
@@ -11,4 +11,4 @@ crate-type = ["staticlib"]
 # Local dependencies
 runtime = { path = "../../../library/runtime" }
 terminal = { path = "../../../library/terminal" }
-rdma-core = { path = "../../../usr/rdma-core" }
+ibverbs = { path = "../../../library/ibverbs" }

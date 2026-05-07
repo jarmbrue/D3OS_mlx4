@@ -10,7 +10,7 @@ crate-type = ["staticlib"]
 [dependencies]
 # Local dependencies
 runtime = { path = "../../../library/runtime" }
-rdma_core = { package = "rdma-core", path = "../../../usr/rdma-core" }
+ibverbs = { path = "../../../library/ibverbs" }
 rdma = { path = "../../../library/rdma" }
 terminal = { path = "../../../library/terminal" }
 network = { path = "../../../library/network" }

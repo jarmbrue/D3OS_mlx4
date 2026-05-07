@@ -1,7 +1,7 @@
-use rdma_core::*;
-use rdma_core::sliceindex::SliceIndex;
+use ibverbs::{Context, ProtectionDomain, LocalMemoryRegion, CompletionQueue, QueuePairBuilder};
+use ibverbs::sliceindex::SliceIndex;
 use smoltcp::wire::Ipv4Address;
-use rdma_core::{ibv_qp_type::Type, ibv_wc};
+use ibverbs::{ibv_qp_type::Type, ibv_wc};
 use rdma::ibv_qp_cap;
 use core::ops;
 use core::slice::from_raw_parts_mut;

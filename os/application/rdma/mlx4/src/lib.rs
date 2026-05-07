@@ -1,7 +1,6 @@
 #![no_std]
 
 mod bench;
-mod build_constants;
 mod handshake;
 mod integrity;
 mod rdma_read;
@@ -80,7 +79,7 @@ impl RunConfig {
             return None;
         }
 
-        let mut config = Self {
+        let config = Self {
             target_ip: args[1].parse().ok()?,
             target_port: args[2].parse().ok()?,
             benchmark: Benchmark::Throughput,

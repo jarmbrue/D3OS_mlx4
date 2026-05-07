@@ -1,7 +1,7 @@
 #![no_std]
 
 use terminal::{print, println};
-use rdma_core::devices;
+use ibverbs::devices;
 use runtime::*;
 
 pub fn invoke() {

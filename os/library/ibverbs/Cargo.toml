@@ -1,6 +1,6 @@
 [package]
 edition = "2024"
-name = "rdma-core"
+name = "ibverbs"
 version = "0.1.0"
 authors = [ "Sandro Jose Leal Miudo" ]
 

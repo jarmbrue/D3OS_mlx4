@@ -4,7 +4,7 @@ use alloc::{vec, vec::Vec};
 use core::ops::Range;
 use cpu_core::flush_cache;
 use rdma::ibv_send_flags;
-use rdma_core::{CompletionQueue, LocalMemoryRegion, QueuePair, RemoteMemoryRegion};
+use ibverbs::{CompletionQueue, LocalMemoryRegion, QueuePair, RemoteMemoryRegion};
 use spin::Once;
 use terminal::println;
 use time::get_time_in_us;

@@ -1,6 +1,6 @@
 use super::{session, handshake, integrity};
 use mm::{MmapFlags, mmap};
-use rdma_core::{
+use ibverbs::{
     devices, LocalMemoryRegion
 };
 use rdma::ibv_send_flags;
