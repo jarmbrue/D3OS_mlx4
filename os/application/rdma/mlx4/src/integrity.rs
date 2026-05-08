@@ -83,7 +83,7 @@ where
     buf
 }
 
-pub struct pattern_functions {
+pub struct PatternFunctions {
     pub xor: fn(usize) -> u8,
     pub seq: fn(usize) -> u8,
     pub rot: fn(usize) -> u8,
@@ -91,7 +91,7 @@ pub struct pattern_functions {
     pub fill: fn(usize) -> u8,
 }
 
-pub const PAYLOAD_FUNCTIONS: pattern_functions = pattern_functions {
+pub const PAYLOAD_FUNCTIONS: PatternFunctions = PatternFunctions {
     xor: pattern_xor_index,
     seq: pattern_sequential,
     rot: pattern_mix_rotate,

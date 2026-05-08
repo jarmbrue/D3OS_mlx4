@@ -10,7 +10,6 @@ use alloc::{vec};
 use cpu_core::{flush_cache};
 use core::{arch::x86_64::_mm_mfence, net::SocketAddr};
 use concurrent::thread::sleep;
-use terminal::println;
 
 pub fn invoke(config: RunConfig) {
     let min_cq_entries = 1000;
@@ -47,7 +46,7 @@ pub fn invoke(config: RunConfig) {
     let mut rdma_session = session::RdmaSession::new(&ctx, &pd, alloc_mem, min_cq_entries);
     let tcp_stream  = network::TcpStream::connect(SocketAddr::new(core::net::IpAddr::V4(config.target_ip), config.target_port)).unwrap();
 
-    // sleep(1000); // give some time for the memory regions
+    sleep(1000); // give some time for the memory regions
 
     let payload_f = integrity::PAYLOAD_FUNCTIONS.lcg;
 
@@ -70,13 +69,11 @@ pub fn invoke(config: RunConfig) {
         .build()
         .expect("build of allocated QP was not successful");
 
-        let mr = &mut rdma_session.mr as *mut LocalMemoryRegion<'_, u8>;
-
         handshake::wait_ready(&tcp_stream);
         handshake::send_ack(&tcp_stream);
 
         let endpoint = allocated_qp.endpoint();
-        let local_mr = unsafe { (*mr).remote() };
+        let local_mr = rdma_session.mr.remote();
 
         let remote_qp_endpoint = handshake::exchange_endpoints(&tcp_stream, endpoint);
         println!("Successfully received remote endpoint : {:?}", remote_qp_endpoint);
@@ -95,21 +92,21 @@ pub fn invoke(config: RunConfig) {
             let result = unsafe { qp.rdma_read(
                 &mut remote_mr,
                 vec![0..alloc_mem as u64],
-                &mut *mr,
+                &mut rdma_session.mr,
                 vec![vec![0..alloc_mem]],
                 vec![1],
                 vec![ibv_send_flags::SIGNALED]
-            ).expect("ups ... something went wrong! ") };
+            ).expect("ups ... something went wrong!") };
 
             session::RdmaSession::poll_cq::<10>(&rdma_session.cq_send, 1);
 
             println!("Checking data integrity...");
 
-            unsafe { flush_cache(&*mr) };
+            unsafe { flush_cache(&rdma_session.mr) };
 
             unsafe { _mm_mfence() };
 
-            let packet = unsafe { session::RdmaSession::read(&mut *mr, 0..alloc_mem) };
+            let packet = session::RdmaSession::read(&rdma_session.mr, 0..alloc_mem);
 
             let _ = integrity::validate_packet(packet)
                 .map_err(|e| {
@@ -119,37 +116,34 @@ pub fn invoke(config: RunConfig) {
                 });
         } else {
             let payload = integrity::build_payload(ALLOC_MEM - META_DATA_SIZE, payload_f);
-
             let packet_len = integrity::build_packet(&payload[..], context_buffer).expect("failed to create packet");
             let packet = &context_buffer[..packet_len];
 
-            unsafe { bench::rdma_bench(
+            bench::rdma_bench(
                 bench::SpecRdmaType::RdmaRead,
                 config.benchmark,
                 alloc_mem,
                 &mut qp,
-                &mut *mr,
+                &mut rdma_session.mr,
                 &mut remote_mr,
                 &rdma_session.cq_send,
                 Some(packet)
-            ) };
+            );
         }
 
         handshake::send_ack(&tcp_stream);
     } else {
         println!("Starting as RECEIVER");
-
         let allocated_qp = session::RdmaSession::create_qp(rdma_session.pd, &rdma_session.cq_send, &rdma_session.cq_recv, true, 0, 0, 0, 0)
             .build()
             .expect("build of allocated QP was not successful");
 
-        handshake::send_ready_and_wait_ack(&tcp_stream, 10, 3000); // this has to be optimized since
-        // otherwise we would fire to many ready messages and fill up the buffer to fast !
-
-        let mr = &mut rdma_session.mr;
+        // this has to be optimized since
+        // otherwise we would fire to many ready messages and fill up the buffer to fast!
+        handshake::send_ready_and_wait_ack(&tcp_stream, 10, 3000);
 
         let endpoint = allocated_qp.endpoint();
-        let local_mr = mr.remote();
+        let local_mr = rdma_session.mr.remote();
 
         let remote_qp_endpoint = handshake::exchange_endpoints(&tcp_stream, endpoint);
         println!("Successfully received remote endpoint : {:?}", remote_qp_endpoint);
@@ -159,15 +153,14 @@ pub fn invoke(config: RunConfig) {
         let _qp = allocated_qp.handshake(remote_qp_endpoint).expect("failed handshake");
 
         let payload = integrity::build_payload(ALLOC_MEM - META_DATA_SIZE, payload_f);
-
         let packet_len = integrity::build_packet(&payload[..], context_buffer).expect("failed to create packet");
         let packet = &context_buffer[..packet_len];
 
-        session::RdmaSession::write(mr, packet, 0..alloc_mem);
+        session::RdmaSession::write(&mut rdma_session.mr, packet, 0..alloc_mem);
 
         unsafe { _mm_mfence() };
 
-        unsafe { flush_cache(mr) };
+        unsafe { flush_cache(&rdma_session.mr) };
 
         handshake::send_ack(&tcp_stream);
 

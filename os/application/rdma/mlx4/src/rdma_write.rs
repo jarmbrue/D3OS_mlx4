@@ -57,7 +57,6 @@ pub fn invoke(config: RunConfig) {
 
         let max_send_wr = 1024;
         let max_send_sge = 1;
-
         let allocated_qp = session::RdmaSession::create_qp(
             rdma_session.pd,
             &rdma_session.cq_send,
@@ -68,7 +67,7 @@ pub fn invoke(config: RunConfig) {
             max_send_sge,
             0,
         )
-        .set_timeout(10)
+        .set_timeout(20)
         .set_min_rnr_timer(30)
         .build()
         .expect("build of allocated QP was not successful");
@@ -90,9 +89,9 @@ pub fn invoke(config: RunConfig) {
 
         handshake::wait_ack(&tcp_stream);
 
-        if config.only_test {
-            println!("Performing RDMA write...");
+        println!("Performing RDMA write...");
 
+        if config.only_test {
             let _result = unsafe { qp.rdma_write(
                 &mut rdma_session.mr,
                 vec![vec![0..alloc_mem]],
@@ -105,7 +104,6 @@ pub fn invoke(config: RunConfig) {
             session::RdmaSession::poll_cq::<10>(&rdma_session.cq_send, 1);
         } else {
             bench::rdma_bench(
-
                 bench::SpecRdmaType::RdmaWrite,
                 config.benchmark,
                 alloc_mem,
