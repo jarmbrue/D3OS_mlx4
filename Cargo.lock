@@ -1137,6 +1137,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
 
 [[package]]
+name = "perftest"
+version = "0.0.1"
+dependencies = [
+ "core2",
+ "ibverbs",
+ "network",
+ "rdma",
+ "runtime",
+ "terminal",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"

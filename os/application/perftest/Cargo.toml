@@ -1,0 +1,24 @@
+[package]
+edition = "2024"
+name = "perftest"
+version = "0.0.1"
+authors = ["Julius Armbruester <julius.armbruester@hhu.de>"]
+
+[lib]
+crate-type = ["staticlib"]
+path = "src/main.rs"
+test = false
+doctest = false
+bench = false
+
+[dependencies]
+# Local dependencies
+terminal = { path = "../../library/terminal" }
+ibverbs = { path = "../../library/ibverbs"}
+rdma = { path = "../../library/rdma" }
+runtime = { path = "../../library/runtime" }
+network = { path = "../../library/network" }
+
+
+core2 = { version = "0.4.0", default-features = false }
+#smoltcp = { version = "0.12", default-features = false, features = ["proto-ipv4"] }

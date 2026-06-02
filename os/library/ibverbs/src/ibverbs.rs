@@ -903,7 +903,7 @@ pub struct PreparedQueuePair<'res> {
 #[derive(Default, Copy, Clone, Debug, Eq, PartialEq, Hash)]
 #[repr(transparent)]
 pub struct Gid {
-    raw: [u8; 16],
+    pub raw: [u8; 16],
 }
 
 impl Gid {
@@ -1224,7 +1224,7 @@ impl<'ctx> ProtectionDomain<'ctx> {
     ///  - `EINVAL`: Invalid access value.
     ///  - `ENOMEM`: Not enough resources (either in operating system or in RDMA device) to
     ///    complete this operation.
-    pub fn allocate<'pd, T: Sized + Copy + Default>(
+    pub fn allocate<'pd, T>(
         &'pd self,
         n: usize,
     ) -> io::Result<LocalMemoryRegion<'pd, T>> {
