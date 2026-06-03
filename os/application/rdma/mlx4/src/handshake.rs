@@ -91,7 +91,7 @@ pub fn exchange_endpoints(session: &TcpStream, local_ep: QueuePairEndpoint) -> Q
     let mut buf = [0u8; 1024];
     let used = encode_into_slice(local_ep, &mut buf, config).unwrap();
 
-    println!("Sending endpoint ({} bytes) to {}:{}", used, session.peer_address().ip(), session.peer_address().port());
+    println!("Sending endpoint ({} bytes) to {}:{}", used, session.peer_addr().ip(), session.peer_addr().port());
     match session.write(&buf[..used]) {
         Ok(_) => println!("Endpoint sent successfully"),
         Err(e) => println!("Failed to send endpoint: {:?}", e),
@@ -120,7 +120,7 @@ pub fn exchange_memory_region(session: &TcpStream, local_mr: RemoteMemoryRegion<
 
     let mut buf = [0u8; 1024];
     let used = encode_into_slice(local_mr, &mut buf, config).unwrap();
-    println!("Sending memory region ({} bytes) to {}:{}", used, session.peer_address().ip(), session.peer_address().port());
+    println!("Sending memory region ({} bytes) to {}:{}", used, session.peer_addr().ip(), session.peer_addr().port());
     match session.write(&buf[..used]) {
         Ok(_) => println!("Memory region sent successfully"),
         Err(e) => println!("Failed to send memory region: {:?}", e),

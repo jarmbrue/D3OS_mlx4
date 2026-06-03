@@ -20,7 +20,6 @@ use crate::{pci_bus, process_manager, scheduler, timer};
 use crate::process::thread::Thread;
 use crate::naming::virtual_objects::{create_pseudo, close_pseudo};
 use syscall::return_vals::Errno;
-use network::SocketType;
 
 pub struct SocketS { pub handle: SocketHandle }
 
@@ -58,7 +57,6 @@ impl PseudoFileObject for SocketS {
     }
 }
 
-
 static RTL8139: Once<Arc<Rtl8139>> = Once::new();
 
 static INTERFACES: RwLock<Vec<Interface>> = RwLock::new(Vec::new());
@@ -71,6 +69,13 @@ static SOCKET_PROCESS: RwLock<BTreeMap<SocketHandle, Arc<Process>>> = RwLock::ne
 static DNS_SOCKET: Once<SocketHandle> = Once::new();
 static DHCP_SOCKET: Once<SocketHandle> = Once::new();
 static SOCK_RES_TABLE: Once<RwLock<SocketResolutionTable>> = Once::new();
+
+#[derive(Debug)]
+#[repr(u8)]
+#[non_exhaustive]
+pub enum SocketType {
+    Udp, Tcp, Icmp,
+}
 
 pub fn init() {
     SOCKETS.call_once(|| RwLock::new(SocketSet::new(Vec::new())));
@@ -316,30 +321,6 @@ pub fn open_socket(protocol: SocketType) -> Result<(SocketHandle, usize), Errno>
     Ok((sh, fd))
 }
 
-pub fn close_socket_legacy(handle: SocketHandle, fh: usize) {
-    let table_v = SOCK_RES_TABLE.get().unwrap().read();
-    let query_hit = table_v.sockets.iter().enumerate()
-            .find(|(_, x)| x.0.handle == handle);
-
-    let Some((index, _)) = query_hit else {
-        return;
-    };
-
-    SOCK_RES_TABLE.get().unwrap().write().sockets.swap_remove(index);
-    
-    close_pseudo(fh).expect("File handle not present !");
-}
-
-pub fn connect_socket(handle: SocketHandle, destination: Ipv4Addr, port: u16) -> bool {
-    SOCK_RES_TABLE.get().unwrap().write().sockets.iter_mut()
-        .find(|x| x.0.handle == handle)
-        .and_then(|x| {
-            x.1 = destination;
-            x.2 = port;
-
-            Some(x)
-        }).is_some()
-}
 
 pub fn close_socket(handle: SocketHandle) {
     let mut sockets = SOCKETS.get().expect("Socket set not initialized!").write();

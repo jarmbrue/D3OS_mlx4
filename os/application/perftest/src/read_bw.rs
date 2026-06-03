@@ -2,8 +2,8 @@ use core::{net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4}, str::FromStr};
 
 use alloc::vec::Vec;
 use alloc::{format, string::String, vec};
-use core2::io;
-use core2::io::ErrorKind;
+use core3::io;
+use core3::io::ErrorKind;
 use ibverbs::{CompletionQueue, Gid, LocalMemoryRegion, QueuePairEndpoint, ibv_qp_type};
 use network::{TcpListener, TcpStream};
 use rdma::{ibv_qp_cap, ibv_wc};
@@ -101,11 +101,11 @@ fn run_server(
     my_info: PeerInfo,
 ) -> io::Result<()> {
     let listen_addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), cfg.port);
-    let listener = TcpListener::bind(SocketAddr::V4(listen_addr)).unwrap();
+    let mut listener = TcpListener::bind(SocketAddr::V4(listen_addr)).unwrap();
     println!("Waiting for client to connect on {} ...", listen_addr);
 
     let mut stream = listener.accept().unwrap();
-    println!("Client connected from {}", stream.peer_address());
+    println!("Client connected from {}", stream.peer_addr());
 
     // Handshake: client sends first, server responds.
     let client_info = PeerInfo::read_from(&mut stream).unwrap();

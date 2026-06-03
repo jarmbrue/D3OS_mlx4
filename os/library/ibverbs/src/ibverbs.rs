@@ -81,7 +81,7 @@ use rdma::{ibv_port_attr, ibv_recv_wr, ibv_send_wr, ibv_send_flags, ibv_qp_cap }
 use ibverbs_sys as ffi;
 
 use alloc::{boxed::Box, ffi::CString, vec::Vec};
-use core2::io;
+use core3::io;
 
 const PORT_NUM: u8 = 1;
 

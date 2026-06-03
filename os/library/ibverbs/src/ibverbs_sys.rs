@@ -6,7 +6,7 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, string::{String, ToString}, vec, vec::{Vec}};
-use core2::io::{Error, ErrorKind, Result as Result};
+use core3::io::{Error, ErrorKind, Result as Result};
 pub use rdma::{
     __be64, ibv_access_flags, ibv_ah_attr, ibv_device_attr, ibv_gid, ibv_mtu,
     ibv_port_attr, ibv_port_state,

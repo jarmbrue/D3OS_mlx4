@@ -64,7 +64,6 @@ strum = { version = "0.26", default-features = false }
 strum_macros = "0.26"
 tock-registers = "0.10.1"
 zerocopy = "0.5.2"
-core2 = { version = "0.4", default-features = false, features = ["alloc"] }
 
 [build-dependencies]
 built = { version = "0.7.7", features = ["chrono", "git2"] }
