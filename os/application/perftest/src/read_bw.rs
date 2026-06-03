@@ -1,12 +1,11 @@
 use core::{net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4}, str::FromStr};
 
-use alloc::vec::Vec;
-use alloc::{format, string::String, vec};
+use alloc::string::String;
 use core3::io;
 use core3::io::ErrorKind;
-use ibverbs::{CompletionQueue, Gid, LocalMemoryRegion, QueuePairEndpoint, ibv_qp_type};
+use ibverbs::{ibv_qp_type, Gid, LocalMemoryRegion, QueuePairEndpoint};
 use network::{TcpListener, TcpStream};
-use rdma::{ibv_qp_cap, ibv_wc};
+use rdma::ibv_qp_cap;
 use terminal::println;
 
 use crate::comm::{self, PeerInfo};

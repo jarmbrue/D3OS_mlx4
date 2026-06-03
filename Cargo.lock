@@ -645,11 +645,9 @@ name = "ibverbs"
 version = "0.1.0"
 dependencies = [
  "bincode",
- "bitflags 2.10.0",
  "core3",
  "mm",
  "rdma",
- "spin 0.9.8",
  "syscall",
 ]
 
@@ -836,7 +834,6 @@ dependencies = [
  "modular-bitfield-msb",
  "multiboot2",
  "naming",
- "network",
  "nolock",
  "num_enum 0.7.5",
  "pc-keyboard",

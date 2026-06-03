@@ -104,7 +104,7 @@ pub fn exchange_endpoints(session: &TcpStream, local_ep: QueuePairEndpoint) -> Q
                 println!("Received {} bytes for endpoint", n);
                 break n;
             }
-            Err(err) => {
+            Err(_) => {
                 // println!("No data for endpoint: {:?}", err);
                 sleep(100);
             }

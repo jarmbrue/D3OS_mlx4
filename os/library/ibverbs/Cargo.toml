@@ -14,12 +14,8 @@ mm = { path = "../../library/mm" }
 syscall = { path = "../../library/syscall" }
 
 # external depencies
-spin = "0.9.8"
 bincode = { version = "2.0.1", optional = true, default-features = false, features = ["derive", "alloc"] }
 core3 = { version = "0.1", default-features = false }
-
-# External depencies
-bitflags = "2.9.0"
 
 [features]
 default = ["serialize"]
