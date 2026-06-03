@@ -1,3 +1,16 @@
+/* ╔═════════════════════════════════════════════════════════════════════════╗
+   ║ Module: tty                                                             ║
+   ╟─────────────────────────────────────────────────────────────────────────╢
+   ║ TTY-Input device (Workaround for missing pipes).                        ║
+   ║ Buffers input from the terminal when an application is reading.         ║
+   ║ Depending on the chosen TerminalMode, the application will block until  ║ 
+   ║ terminal has written some input. Just a Workaround. Parallel reads      ║
+   ║ where not considered and might cause problems.                          ║
+   ╟─────────────────────────────────────────────────────────────────────────╢
+   ║ Author: Sebastian Keller, Univ. Duesseldorf, 2025                       ║
+   ╚═════════════════════════════════════════════════════════════════════════╝
+*/
+
 use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -121,7 +134,10 @@ impl TtyOutput {
             output_buffer.push_back(*byte);
             count += 1;
         }
-
+        if output_buffer.len() > 4096 {
+//            info!("tty write, yield now, buffer size: {}", output_buffer.len());
+            scheduler().sleep(100);
+        }
         count
     }
 

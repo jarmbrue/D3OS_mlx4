@@ -28,13 +28,13 @@ macro_rules! println {
     });
 }
 
-static WRITER: Mutex<Writer> = Mutex::new(Writer::new());
+pub static TERMINAL_WRITER: Mutex<Writer> = Mutex::new(Writer::new());
 
 pub fn print(args: fmt::Arguments) {
-    WRITER.lock().write_fmt(args).unwrap();
+    TERMINAL_WRITER.lock().write_fmt(args).unwrap();
 }
 
-struct Writer {}
+pub struct Writer {}
 
 impl Writer {
     const fn new() -> Self {

@@ -38,7 +38,7 @@ impl Log for Logger {
 }
 
 impl Logger {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             level: Level::Debug,
         }

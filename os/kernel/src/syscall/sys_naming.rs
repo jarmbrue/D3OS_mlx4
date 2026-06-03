@@ -44,7 +44,7 @@ pub unsafe extern "sysv64" fn sys_write(fh: usize, buffer: *const u8, buffer_len
     return_vals::convert_syscall_result_to_ret_code(api::write(fh, buf))
 }
 
-pub extern "sysv64" fn sys_seek(fh: usize, offset: usize, origin: usize) -> isize {
+pub extern "sysv64" fn sys_seek(fh: usize, offset: isize, origin: usize) -> isize {
     return_vals::convert_syscall_result_to_ret_code(api::seek(fh, offset, SeekOrigin::from_primitive(origin)))
 }
 

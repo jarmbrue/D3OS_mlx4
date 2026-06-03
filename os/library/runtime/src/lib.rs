@@ -26,7 +26,7 @@ unsafe extern "C" {
 }
 
 #[global_allocator]
-static ALLOCATOR: LockedHeap = LockedHeap::empty();
+pub static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
 #[cfg(not(any(test, feature = "std")))]
 #[panic_handler]
@@ -46,6 +46,8 @@ extern "sysv64" fn entry() {
     unsafe {
         ALLOCATOR.lock().init(env::HEAP_START as *mut u8, env::HEAP_SIZE);
     }
+
+    thread::init_thread_environment();
 
     unsafe {
         main(*env::ARGC_PTR as isize, env::ARGV_PTR);

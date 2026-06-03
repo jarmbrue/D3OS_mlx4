@@ -325,6 +325,7 @@ pub fn main() {
         loop {
             if let Some(event) = terminal::read::read_raw() {
                 INPUT_BUFFER.lock().push(event);
+            } else {
                 thread::switch();
             }
         }

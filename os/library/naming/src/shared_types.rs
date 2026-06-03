@@ -3,7 +3,7 @@
    ╟─────────────────────────────────────────────────────────────────────────╢
    ║ Descr.: Types used by the naming service both in user und kernel mode.  ║
    ╟─────────────────────────────────────────────────────────────────────────╢
-   ║ Author: Michael Schoettner, 25.08.2025, HHU                             ║
+   ║ Author: Michael Schoettner, 23.12.2025, HHU                             ║
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
 use alloc::string::String;
@@ -14,10 +14,10 @@ bitflags! {
     pub struct OpenOptions: usize {
         const READONLY  = 1;
         const READWRITE = 2;
-        const CREATE    = 3;
-        const EXCLUSIVE = 4;
-        const DIRECTORY = 5;
-        const WRITEONLY = 6; // relevant for pipes
+        const CREATE    = 4;
+        const EXCLUSIVE = 8;
+        const DIRECTORY = 16;
+        const WRITEONLY = 32; // relevant for pipes
     }
 }
 
@@ -28,7 +28,7 @@ pub enum SeekOrigin {
     #[num_enum(default)]
     Start = 1,
     End = 2,
-    Current = 3,
+    Current = 4,
 }
 
 /// File types
@@ -39,7 +39,7 @@ pub enum FileType {
     NamedPipe = 1,
     Directory = 4,
     Regular = 8,
-    Link = 10,
+    Link = 16,
 }
 
 /// A directory entry 

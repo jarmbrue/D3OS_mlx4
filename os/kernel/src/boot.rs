@@ -11,6 +11,7 @@
 use crate::consts;
 use crate::device::pit::Timer;
 use crate::device::ps2::{Keyboard, Mouse};
+use crate::device::{qemu_cfg, virtio};
 use crate::device::serial::SerialPort;
 use crate::interrupt::interrupt_dispatcher;
 use crate::memory::nvmem::Nfit;
@@ -23,7 +24,7 @@ use crate::{
     acpi_tables, allocator, apic, gdt, get_initrd_frames,
     efi_services_available, init_acpi_tables, init_apic, init_boot_info,
     init_cpu_info, init_initrd, init_lfb, init_lfb_info, init_pci,
-    init_serial_port, init_tty, initrd, keyboard, logger, mouse,
+    init_serial_port, init_tty, keyboard, logger, mouse,
     process_manager, scheduler, serial_port, timer, tss,
 };
 use crate::{built_info, memory, naming, network, storage, infiniband};
@@ -92,62 +93,69 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     info!("Initializing GDT");
     init_gdt();
 
-    // The bootloader marks the kernel image region as available, so we need to reserve it manually
-    let kernel_image_region = kernel_image_region();
+    // Enable FSGSBASE
+    info!("Enabling FSGSBASE instructions");
     unsafe {
-        memory::frames::boot_reserve(kernel_image_region);
+        Cr4::update(|flags| flags.insert(Cr4Flags::FSGSBASE));
     }
-    // also reserve frames for initrd
+
+    // and initialize kernel heap, after which formatted strings may be used in logs and panics.
+    info!("Initializing kernel heap");
+    let heap_region = dram::boot_alloc(consts::KERNEL_HEAP_PAGES).expect("Failed to allocate kernel heap frames!");
+    dram::insert_reserved(heap_region);
+    unsafe {
+        allocator().init(&heap_region);
+    }
+    info!("Kernel heap region:  [{:#x} - {:#x}], #frames: [{}]",
+        heap_region.start.start_address().as_u64(),
+        heap_region.end.start_address().as_u64(),
+        consts::KERNEL_HEAP_PAGES,
+    );
+
+    // The bootloader marks the kernel image region as available, so we need to mark it manually as reserved
+    let kernel_image_region = kernel_image_region();
+    dram::insert_reserved(kernel_image_region);
+    info!("kernel image region: [{:#x} - {:#x}], #frames: [{}]",
+        kernel_image_region.start.start_address().as_u64(), 
+        kernel_image_region.end.start_address().as_u64(),
+        kernel_image_region.len()
+    );
+
+    // also mark the  memory region for 'initrd' as reserved
     let initrd_tag = multiboot
         .module_tags()
         .find(|module| module.cmdline().is_ok_and(|name| name == "initrd"))
         .expect("Initrd not found!");
     let initrd_region = get_initrd_frames(initrd_tag);
-    unsafe {
-        memory::frames::boot_reserve(initrd_region);
-    }
-    // and the multiboot information
-    let multiboot_region = get_multiboot_frames(&multiboot);
-    unsafe {
-        memory::frames::boot_reserve(multiboot_region);
-    }
-
-    // and initialize kernel heap, after which formatted strings may be used in logs and panics.
-    info!("Initializing kernel heap");
-    let heap_region = unsafe { memory::vmm::alloc_frames(consts::KERNEL_HEAP_PAGES) };
-    unsafe {
-        allocator().init(&heap_region);
-    }
-    info!("kernel image region: [Start: {:#x}, End: {:#x}]",
-        kernel_image_region.start.start_address().as_u64(),
-        kernel_image_region.end.start_address().as_u64(),
-    );
+    dram::insert_reserved(initrd_region);
     info!(
-        "Initrd region: [Start: {:#x}, End: {:#x}]",
+        "Initrd region:       [{:#x} - {:#x}], #frames: [{}]",
         initrd_region.start.start_address().as_u64(),
         initrd_region.end.start_address().as_u64(),
+        initrd_region.len()
     );
+
+    // and finally the same for the multiboot region
+    let multiboot_region = get_multiboot_frames(&multiboot);
+    dram::insert_reserved(multiboot_region);
     info!(
-        "Multiboot region: [Start: {:#x}, End: {:#x}]",
+        "Multiboot region:    [{:#x} - {:#x}], #frames: [{}]",
         multiboot_region.start.start_address().as_u64(),
         multiboot_region.end.start_address().as_u64(),
+        multiboot_region.len()
     );
-    trace!("{multiboot:?}");
 
-    // Allocate frames for the kernel heap using the new way
-    dram::alloc(consts::KERNEL_HEAP_PAGES as u64).expect("Failed to allocate kernel heap frames!");
-    dram::dump();
-    debug!("Old page frame allocator:\n{}", memory::frames::dump());
-
-    /*
-        Hier den neuen Frame-Allocator aktivieren + Device Memory separat verwalten
-     */
-
-    // Merge reserved and free regions
+    // Remove all reserved regions from the free regions in 'dram'
     dram::finalize();
-    dram::dump();
-    debug!("Old page frame allocator:\n{}", memory::frames::dump());
 
+    // Dump information about available and reserved memory regions
+    dram::dump();
+
+    // Initialize the page frame allocator
+    memory::init();
+    memory::dump();
+
+    debug!("Old page frame allocator:\n{}", memory::frames::dump());
 
     // Initialize CPU information
     init_cpu_info();
@@ -171,7 +179,7 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
         .expect("Unknown framebuffer type!");
     let fb_start_phys_addr = fb_info.address();
     let fb_end_phys_addr = fb_start_phys_addr + (fb_info.height() * fb_info.pitch()) as u64;
-
+    
     sys_vmem::init_fb_info(&fb_info);
 
     kernel_process.virtual_address_space.kernel_map_devm_identity(
@@ -293,19 +301,15 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     info!("Scanning PCI bus");
     init_pci();
 
+    virtio::init_devices(fb_start_phys_addr, fb_end_phys_addr); // Framebuffer Start und Endadresse von Multiboot-LFB
+
     // Initialize storage devices
     storage::init();
 
     // Initialize network stack
     network::init();
 
-    /*#[cfg(any(kernel_test, kernel_bench))]
-    init_test_runner(); */
-
     infiniband::init();
-
-    /*#[cfg(any(kernel_test, kernel_bench))]
-    run_tests(); */
 
     // Initialize non-volatile memory (creates identity mappings for any non-volatile memory regions)
     nvmem::init();
@@ -359,21 +363,14 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
 
     if BOOT_TO_GUI {
         // Create and register the 'window_manager' thread in the scheduler
-        scheduler().ready(Thread::load_application(initrd().entries()
-            .find(|entry| entry.filename().as_str().unwrap() == "bin/window_manager")
-            .expect("Window Manager application not available!")
-            .data(), "window_manager", &[].to_vec()));
+        scheduler().ready(Thread::load_application(
+            "bin/window_manager", "window_manager", &[].to_vec(),
+        ).expect("failed to load window_manager"));
     } else {
         // Create and register the 'terminal_emulator' thread (from app image in ramdisk) in the scheduler
         scheduler().ready(Thread::load_application(
-            initrd()
-                .entries()
-                .find(|entry| entry.filename().as_str().unwrap() == "bin/terminal_emulator")
-                .expect("Terminal application not available!")
-                .data(),
-            "terminal_emulator",
-            &[].to_vec(),
-        ));
+            "bin/terminal_emulator", "terminal_emulator", &[].to_vec(),
+        ).expect("failed to load terminal_emulator"));
     }
 
     // Dump information about all processes (including VMAs)
@@ -410,11 +407,11 @@ fn init_gdt() {
         // Load task state segment
         load_tss(SegmentSelector::new(5, Ring0));
 
-        // Set code and stack segment register
+        // Set CS and SS segment registers
         CS::set_reg(SegmentSelector::new(1, Ring0));
         SS::set_reg(SegmentSelector::new(2, Ring0));
 
-        // Other segment registers are not used in long mode (set to 0)
+        // Other segment registers are unused in 64-bit mode, so we set them to null selectors
         DS::set_reg(SegmentSelector::new(0, Ring0));
         ES::set_reg(SegmentSelector::new(0, Ring0));
         FS::set_reg(SegmentSelector::new(0, Ring0));
@@ -492,8 +489,8 @@ fn scan_multiboot2_memory_map(memory_map: &MemoryMapTag) {
         .memory_areas()
         .iter()
         .filter(|area| area.typ() == MemoryAreaType::Available)
-        .for_each(|area| unsafe {
-            memory::frames::boot_avail(PhysFrameRange {
+        .for_each(|area| {
+            dram::insert_available(PhysFrameRange {
                 start: PhysFrame::from_start_address(PhysAddr::new(area.start_address()).align_up(PAGE_SIZE as u64)).unwrap(),
                 end: PhysFrame::from_start_address(PhysAddr::new(area.end_address()).align_down(PAGE_SIZE as u64)).unwrap(),
             });
@@ -515,6 +512,10 @@ fn scan_efi_multiboot2_memory_map(memory_map: &EFIMemoryMapTag) {
                 || area.ty.0 == MemoryType::BOOT_SERVICES_DATA.0
         }) // .0 necessary because of different version dependencies to uefi-crate
         .for_each(|area| {
+            if area.virt_start != 0 {
+                warn!("ignoring memory area with virtual address");
+                return;
+            }
             let start = PhysFrame::from_start_address(PhysAddr::new(area.phys_start).align_up(PAGE_SIZE as u64)).unwrap();
             let frames = PhysFrame::range(start, start + area.page_count);
 
@@ -523,9 +524,7 @@ fn scan_efi_multiboot2_memory_map(memory_map: &EFIMemoryMapTag) {
                 unprotect_frames(frames);
             }
 
-            unsafe {
-                memory::frames::boot_avail(frames);
-            }
+            dram::insert_available(frames);
         });
 }
 
@@ -542,6 +541,10 @@ fn scan_efi_memory_map(memory_map: &dyn MemoryMap) {
                 || area.ty == MemoryType::BOOT_SERVICES_DATA
         })
         .for_each(|area| {
+            if area.virt_start != 0 {
+                warn!("ignoring memory area with virtual address");
+                return;
+            }
             let start = PhysFrame::from_start_address(PhysAddr::new(area.phys_start).align_up(PAGE_SIZE as u64)).unwrap();
             let frames = PhysFrame::range(start, start + area.page_count);
 
@@ -550,9 +553,7 @@ fn scan_efi_memory_map(memory_map: &dyn MemoryMap) {
                 unprotect_frames(frames);
             }
 
-            unsafe {
-                memory::frames::boot_avail(frames);
-            }
+            dram::insert_available(frames);
         });
 }
 

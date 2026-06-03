@@ -4,7 +4,7 @@
    ║ Managing opened objects in a global table (OPEN_OBJECTS). And providing ║
    ║ all major functions for the naming service.                             ║
    ╟─────────────────────────────────────────────────────────────────────────╢
-   ║ Author: Michael Schoettner, Univ. Duesseldorf, 03.09.2025               ║
+   ║ Author: Michael Schoettner, Univ. Duesseldorf, 23.12.2025               ║
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
 
@@ -13,8 +13,9 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::result::Result;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use spin::rwlock::RwLock;
 use spin::Once;
+use spin::rwlock::RwLock;
+use log::info;
 
 use super::lookup;
 use super::traits::NamedObject;
@@ -57,6 +58,7 @@ pub(super) fn open_object_table_init() {
 }
 
 pub(super) fn open(path: &str, flags: OpenOptions) -> Result<usize, Errno> {
+    info!("open_object::open: open called for path '{}', flags={:?}", path, flags);
     // try to open the named object for the given path
     let result = lookup::lookup_named_object(path);
     if result.is_err() {
@@ -73,7 +75,7 @@ pub(super) fn open(path: &str, flags: OpenOptions) -> Result<usize, Errno> {
 
     // call the 'open' for pipes specific behavior
     if found_named_object.is_pipe() {
-        found_named_object.as_pipe()?.open(flags)?; // ignore return value
+            found_named_object.as_pipe()?.open(flags)?; // ignore return value
     }
 
     // try to allocate an new handle
@@ -128,16 +130,16 @@ pub(super) fn read(fh: usize, buf: &mut [u8]) -> Result<usize, Errno> {
         })
 }
 
-pub fn seek(fh: usize, offset: usize, origin: SeekOrigin) -> Result<usize, Errno> {
+pub fn seek(fh: usize, offset: isize, origin: SeekOrigin) -> Result<usize, Errno> {
     get_open_object_table().lookup_opened_object(fh).and_then(|opened_object| {
         if opened_object.named_object.is_file() {
             // Make `opened_object` mutable here
             return opened_object.named_object.as_file().and_then(|file| {
                 let new_pos = match origin {
                     SeekOrigin::Start => offset,
-                    SeekOrigin::End => file.stat()?.size + offset,
-                    SeekOrigin::Current => opened_object.pos.load(Ordering::SeqCst) + offset,
-                };
+                    SeekOrigin::End => file.stat()?.size as isize + offset,
+                    SeekOrigin::Current => opened_object.pos.load(Ordering::SeqCst) as isize + offset
+                } as usize;
                 opened_object.pos.store(new_pos, Ordering::SeqCst);
                 Ok(new_pos) // Success
             });
@@ -161,8 +163,17 @@ pub(super) fn readdir(fh: usize) -> Result<Option<DirEntry>, Errno> {
     })
 }
 
-pub(super) fn close(handle: usize) -> Result<usize, Errno> {
-    get_open_object_table().free_handle(handle)
+pub(super) fn close(fh: usize) -> Result<usize, Errno> {
+    info!("open_object::close: close called for fh={}", fh);
+    if let Ok(opened_object) = get_open_object_table().lookup_opened_object(fh) {
+        if opened_object.named_object.is_pipe() {
+            if let Ok(pipe) = opened_object.named_object.as_pipe() {
+                pipe.close(opened_object.options);
+            }
+        }
+    }
+
+    get_open_object_table().free_handle(fh)
 }
 
 /*pub(super) fn dump() {

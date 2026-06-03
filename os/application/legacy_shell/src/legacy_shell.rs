@@ -74,7 +74,9 @@ fn process_line(line: String) {
     if !split.is_empty() {
         if !process_internal_command(&split) {
             match thread::start_application(split[0], split[1..].iter().map(|&s| s).collect()) {
-                Some(app) => app.join(),
+                Some(app) => {
+                    let _ = app.join();
+                },
                 None => println!("Command not found!"),
             }
         }

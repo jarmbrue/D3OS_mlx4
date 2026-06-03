@@ -25,7 +25,7 @@ use x86_64::structures::paging::page::{PageRange, Page};
 
 use crate::interrupt::interrupt_dispatcher::InterruptVector;
 use crate::interrupt::interrupt_handler::InterruptHandler;
-use crate::memory::{vmm, PAGE_SIZE};
+use crate::memory::PAGE_SIZE;
 use crate::storage::block::BlockDevice;
 use crate::storage::{add_block_device, block};
 use crate::{apic, interrupt_dispatcher, memory, pci_bus, scheduler, timer, process_manager};
@@ -942,7 +942,7 @@ impl IdeChannel {
         // Each page corresponds to an 8-byte entry in the PRD
         let prd_size = pages * 8;
         let prd_pages = prd_size / PAGE_SIZE + if (prd_size % PAGE_SIZE) == 0 { 0 } else { 1 };
-        let prd_frames = unsafe { vmm::alloc_frames(prd_pages) };
+        let prd_frames = memory::alloc_frames(prd_pages);
         let prd = unsafe { slice::from_raw_parts_mut(prd_frames.start.start_address().as_u64() as *mut PrdEntry, pages) };
 
         // Disable caching for allocated prd frames
@@ -955,7 +955,7 @@ impl IdeChannel {
 
 
         // Allocate memory for the DMA transfer
-        let dma_frames = unsafe { vmm::alloc_frames(pages) };
+        let dma_frames = memory::alloc_frames(pages);
         let dma_buffer = unsafe { slice::from_raw_parts_mut(dma_frames.start.start_address().as_u64() as *mut u8, buffer.len()) };
 
         // Disable caching for allocated dma buffer
@@ -1006,11 +1006,8 @@ impl IdeChannel {
                 "Failed to perform DMA {:?} operation on drive [{}] on channel [{}]: Data request not answered",
                 mode, info.drive, self.index
             );
-
-            unsafe {
-                memory::vmm::free_frames(dma_frames);
-                memory::vmm::free_frames(prd_frames);
-            }
+            memory::free_frames(dma_frames);
+            memory::free_frames(prd_frames);
             return 0;
         }
 
@@ -1045,11 +1042,8 @@ impl IdeChannel {
                 "Failed to perform DMA {:?} operation on drive [{}] on channel [{}]: Timeout occurred",
                 mode, info.drive, self.index
             );
-
-            unsafe {
-                memory::vmm::free_frames(dma_frames);
-                memory::vmm::free_frames(prd_frames);
-            }
+            memory::free_frames(dma_frames);
+            memory::free_frames(prd_frames);
             return 0;
         }
 
@@ -1059,11 +1053,8 @@ impl IdeChannel {
         }
 
         // Free allocated page frames
-        unsafe {
-            memory::vmm::free_frames(dma_frames);
-            memory::vmm::free_frames(prd_frames);
-        }
-
+        memory::free_frames(dma_frames);
+        memory::free_frames(prd_frames);
 
         count
     }

@@ -3,17 +3,19 @@
    ╟─────────────────────────────────────────────────────────────────────────╢
    ║ Descr.: Syscall interface in user mode.                                 ║
    ╟─────────────────────────────────────────────────────────────────────────╢
-   ║ Author: Fabian Ruhland, Michael Schoettner, 25.8.2025, HHU              ║
+   ║ Author: Fabian Ruhland, Michael Schoettner, 26.12.2025, HHU             ║
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
 #![no_std]
+#![feature(variant_count)]
 
+use core::mem;
 use crate::return_vals::SyscallResult;
 
 pub mod return_vals;
 
 /// Enum with all known system calls
-#[repr(usize)]
+#[repr(u16)] // Cannot use full size of rax, because ax is needed to set up fs/gs in syscall_handler()
 #[allow(dead_code)]
 pub enum SystemCall {
     TerminalReadInput = 0,
@@ -27,6 +29,7 @@ pub enum SystemCall {
     ProcessId,
     ProcessExit,
     ProcessCount,
+    ProcessStatus,
     ThreadCreate,
     ThreadId,
     ThreadSwitch,
@@ -53,7 +56,9 @@ pub enum SystemCall {
     SockAccept,
     SockConnect,
     SockSend,
+    SockCanSend,
     SockReceive,
+    SockCanReceive,
     SockClose,
     GetIpAddresses,
     Mkfifo,
@@ -63,18 +68,15 @@ pub enum SystemCall {
     KeyboardRead,
     MapSystemInfo,
     Log,
+    ShmOpen,
+    ShmAttach,
+    ShmDetach,
+    ShmUnlink,
     Uverb,
-    SocketOpen,
-    SocketConnect,
-    SocketBind,
-    SocketClose,
     GetTimeInUs,
-    // no syscall, just marking last number, see NUM_SYSCALLS
-    // insert any new system calls before this marker
-    LastEntryMarker,
 }
 
-pub const NUM_SYSCALLS: usize = SystemCall::LastEntryMarker as usize;
+pub const NUM_SYSCALLS: usize = mem::variant_count::<SystemCall>() as usize;
 
 ///
 /// Description:

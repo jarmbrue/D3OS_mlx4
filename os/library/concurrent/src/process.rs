@@ -3,10 +3,10 @@
    ╟─────────────────────────────────────────────────────────────────────────╢
    ║ Descr.: Syscalls for process functions.                                 ║
    ╟─────────────────────────────────────────────────────────────────────────╢
-   ║ Author: Fabian Ruhland, Michael Schoettner, 31.8.2024, HHU              ║
+   ║ Author: Fabian Ruhland, Michael Schoettner, 26.12.2025, HHU             ║
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
-use syscall::{syscall, SystemCall};
+use syscall::{SystemCall, return_vals::Errno, syscall};
 
 pub struct Process {
     id: usize,
@@ -41,3 +41,11 @@ pub fn count() -> usize {
     }
     
 }
+
+pub fn ps(buf: &mut [u8]) -> Result<usize, Errno> {
+      syscall(SystemCall::ProcessStatus, &[
+        buf.as_mut_ptr() as usize,
+        buf.len(),
+    ])
+}
+

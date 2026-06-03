@@ -58,6 +58,8 @@ use x86_64::structures::idt::InterruptDescriptorTable;
 use x86_64::structures::paging::PhysFrame;
 use x86_64::structures::paging::frame::PhysFrameRange;
 use x86_64::structures::tss::TaskStateSegment;
+
+
 extern crate alloc;
 extern crate llfree;
 
@@ -93,14 +95,15 @@ fn panic(info: &PanicInfo) -> ! {
     interrupts::disable();
 
     // write the panic directly out to the serial port
-    // this needs no allocations, no locks and should always work
+    // this needs no allocations and should always work
+    unsafe { logger().force_unlock() };
     error!("Panic:");
     let args = info.message().as_str().unwrap_or("(no message provided)");
     let record = Record::builder()
         .level(Level::Error)
         .file(info.location().map(|l| l.file()))
         .line(info.location().map(|l| l.line()))
-        .args(Arguments::from_str_nonconst(&args))
+        .args(Arguments::from_str_nonconst(args))
         .build();
 
     logger().log(&record);
@@ -139,7 +142,6 @@ fn panic(info: &PanicInfo) -> ! {
 
 /// CPU caps.
 static CPU: Once<Cpu> = Once::new();
-
 
 pub fn init_cpu_info() {
     CPU.call_once(|| {

@@ -12,6 +12,12 @@ test = false
 doctest = false
 bench = false
 
+[features]
+virtio_tests = []
+default = ["infiniband_mlx4"]
+infiniband_mlx4 = []
+infiniband_mlx5 = []
+
 [dependencies]
 # Local dependencies
 graphic = { path = "../library/graphic" }
@@ -22,6 +28,7 @@ terminal = { path = "../library/terminal", default-features = false }
 drawer = { path = "../library/drawer", default-features = false }
 system_info = { path = "../library/system_info", default-features = false }
 input = { path = "../library/input", default-features = false }
+virtio = { package = "virtio-drivers", git = "https://github.com/hhu-bsinfo/virtio-drivers.git", rev = "f127bb0e9f3d71142ed1354e88c76b419261f8f3" }
 rdma = { path = "../library/rdma" }
 network = { path = "../library/network" }
 mm = { path = "../library/mm" }
@@ -61,8 +68,3 @@ core2 = { version = "0.4", default-features = false, features = ["alloc"] }
 
 [build-dependencies]
 built = { version = "0.7.7", features = ["chrono", "git2"] }
-
-[features]
-default = ["infiniband_mlx4"]
-infiniband_mlx4 = []
-infiniband_mlx5 = []

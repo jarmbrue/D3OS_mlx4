@@ -11,7 +11,7 @@
    ║   - touch  create a file                                                ║
    ║   - mkfifo create a named pipe                                          ║
    ╟─────────────────────────────────────────────────────────────────────────╢
-   ║ Author: Michael Schoettner, Univ. Duesseldorf, 25.8.2025                ║
+   ║ Author: Michael Schoettner, Univ. Duesseldorf, 23.12.2025               ║
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
 
@@ -94,7 +94,7 @@ pub fn read(object_handle: usize, buffer: &mut [u8]) -> Result<usize, Errno> {
 
 /// Move the object pointer for the named object referenced by `object_handle` to the specified `offset` from the `origin`. \
 /// Returns `Ok(nr of bytes seeked)` or `Err`.
-pub fn seek(object_handle: usize, offset: usize, origin: SeekOrigin) -> Result<usize, Errno> {
+pub fn seek(object_handle: usize, offset: isize, origin: SeekOrigin) -> Result<usize, Errno> {
     open_objects::seek(object_handle, offset, origin)
 }
 
@@ -276,9 +276,8 @@ pub fn mkfifo(path: &str) -> Result<usize, Errno> {
 
     match result {
         Ok(_) => Ok(0), // Successfully created the pipe
-        Err(_) => {
-            // Handle the error here (e.g., logging or returning the error code)
-            Err(Errno::ENOTDIR)
+        Err(e) => {
+            Err(e)
         }
     }
 }

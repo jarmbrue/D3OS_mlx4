@@ -54,6 +54,7 @@ struct KeyboardInterruptHandler {
     keyboard: Arc<Keyboard>,
 }
 
+
 impl Keyboard {
     fn new(controller: Arc<Mutex<Controller>>, buffer_cap: usize, scancode_set: u8) -> Result<Self, KeyboardError> {
         let decoder = match scancode_set {

@@ -5,11 +5,11 @@ use log::{debug, info, warn};
 use smoltcp::{iface::SocketHandle, socket::{icmp, tcp, udp}, wire::IpAddress};
 use syscall::return_vals::Errno;
 
-use crate::{naming::virtual_objects::recover_pseudo, network::{accept_tcp, bind_icmp, bind_tcp, bind_udp, close_socket, connect_tcp, get_ip_addresses, open_icmp, open_tcp, open_udp, receive_datagram, receive_icmp, receive_tcp, send_datagram, send_icmp, send_tcp}, syscall::sys_naming::ptr_to_string};
+use crate::{network::{accept_tcp, bind_icmp, bind_tcp, bind_udp, close_socket, connect_tcp, get_ip_addresses, open_icmp, open_tcp, open_udp, receive_datagram, receive_icmp, receive_tcp, send_datagram, send_icmp, send_tcp, can_recv, can_send, SocketType}, syscall::sys_naming::ptr_to_string};
 
 /// This module contains all network-related system calls.
 
-pub fn sys_sock_open(protocol: SocketType) -> isize {
+pub extern "sysv64" fn sys_sock_open(protocol: SocketType) -> isize {
     info!("opening a {protocol:?} socket");
     // TODO: what happens when we get a type thats not in the enum?
     #[allow(unreachable_patterns)]
@@ -68,7 +68,7 @@ pub unsafe fn sys_sock_accept(
     if matches!(protocol, SocketType::Tcp) {
         info!("accepting connections on {handle:?}");
         match accept_tcp(handle) {
-            Ok(endpoint) => {
+            Ok((endpoint, listen_handle)) => {
                 let addr_str = CString::new(
                     endpoint.addr.to_string().as_bytes()
                 ).unwrap();
@@ -76,7 +76,11 @@ pub unsafe fn sys_sock_accept(
                 unsafe { addr_buf.copy_from_nonoverlapping(
                     addr_bytes.as_ptr(), addr_bytes.len(),
                 ) };
-                endpoint.port.try_into().unwrap()
+                let mut result: isize = endpoint.port.try_into().unwrap();
+                result |= isize::try_from(unsafe {
+                    core::mem::transmute::<SocketHandle, usize>(listen_handle)
+                }).unwrap().checked_shl(16).unwrap();
+                result
             },
             Err(e) => panic!("failed to accept: {e:?}"),
         }
@@ -163,6 +167,11 @@ pub unsafe fn sys_sock_send(
     }
 }
 
+pub fn sys_sock_can_send(handle: SocketHandle, protocol: SocketType) -> isize {
+    can_send(handle, protocol).into()
+}
+
+
 pub unsafe fn sys_sock_receive(
     handle: SocketHandle,
     protocol: SocketType,
@@ -228,10 +237,14 @@ pub unsafe fn sys_sock_receive(
     }
 }
 
-pub fn sys_sock_close(handle: SocketHandle) -> isize {
+pub extern "sysv64" fn sys_sock_close(handle: SocketHandle) -> isize {
     info!("closing {handle} socket");
     close_socket(handle);
     0
+}
+
+pub fn sys_sock_can_recv(handle: SocketHandle, protocol: SocketType) -> isize {
+    can_recv(handle, protocol).into()
 }
 
 /// Return a \0 seperated list of IP addresses for a given hostname.

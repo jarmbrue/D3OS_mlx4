@@ -54,8 +54,8 @@ pub fn read(fh: usize, buf: &mut [u8]) -> Result<usize, Errno> {
 }
 
 #[cfg(feature = "userspace")]
-pub fn seek(fh: usize, offset: usize, origin: SeekOrigin) -> Result<usize, Errno> {
-    syscall(SystemCall::Seek, &[fh, offset, origin.into()])
+pub fn seek(fh: usize, offset: isize, origin: SeekOrigin) -> Result<usize, Errno> {
+    syscall(SystemCall::Seek, &[fh, offset as usize, origin.into()])
 }
 
 #[cfg(feature = "userspace")]

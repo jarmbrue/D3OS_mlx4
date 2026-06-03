@@ -8,7 +8,7 @@
    ║   - FileObject:      specifies all operations on a file object          ║
    ║   - PipeObject:      specifies all operations on a pipe object          ║
    ╟─────────────────────────────────────────────────────────────────────────╢
-   ║ Author: Michael Schoettner, Univ. Duesseldorf, 05.09.2025               ║
+   ║ Author: Michael Schoettner, Univ. Duesseldorf, 23.12.2025               ║
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
 
@@ -39,7 +39,8 @@ pub trait PipeObject: Debug + Send + Sync {
     fn stat(&self) -> Result<Stat, Errno>;
     fn read(&self, _buf: &mut [u8], _offset: usize, _options: OpenOptions) -> Result<usize, Errno>;
     fn write(&self, _buf: &[u8], _offset: usize, _options: OpenOptions) -> Result<usize, Errno>;
- }
+    fn close(&self, flags: OpenOptions);
+}
 
 pub enum PseudoType {
     Socket,
