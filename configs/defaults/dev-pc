@@ -1,4 +1,0 @@
-export REMOTE_USER="sandro"
-export REMOTE_HOST="192.168.0.217"
-export REMOTE_DIR="/home/sandro/Desktop/OS/InfiniBand/D3OS"
-export MOUNT_POINT="./mnt"
