@@ -126,11 +126,6 @@ pub const APPLICATION_REGISTRY: &'static [Application] = &[
         key_value_pair: &[],
     },
     Application {
-        namespace: "legacy_shell",
-        single_value: &[],
-        key_value_pair: &[],
-    },
-    Application {
         namespace: "ls",
         single_value: &[],
         key_value_pair: &[],

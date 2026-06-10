@@ -3,7 +3,7 @@
    ╟─────────────────────────────────────────────────────────────────────────╢
    ║ Descr.: Consts and types for syscall return values.                     ║
    ╟─────────────────────────────────────────────────────────────────────────╢
-   ║ Author: Michael Schoettner, 28.08.2025, HHU                             ║
+   ║ Author: Michael Schoettner, 07.04.2026, HHU                             ║
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
 
@@ -34,8 +34,9 @@ pub enum Errno {
     EOF        = -18, // End of file
     EPIPE      = -19, // Broken pipe
     ENOMEM     = -20, // Not enough space / cannot allocate memory
-    EFAULT     = -21, // Fault occured
-    ENOCMD     = -22,
+    EISDIR     = -21, // Is a directory
+    EFAULT     = -22, // Fault occured
+    ENOCMD     = -23,
 }
 
 

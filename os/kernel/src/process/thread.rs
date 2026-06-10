@@ -40,13 +40,14 @@ use crate::consts::MAX_USER_STACK_SIZE;
 use crate::consts::USER_SPACE_ENV_START;
 use crate::initrd;
 use crate::memory::PAGE_SIZE;
+use crate::process::core_local_storage::scheduler;
 use crate::memory::stack;
 use crate::memory::stack::StackAllocator;
 use crate::memory::vma::VmaType;
 use crate::process::process::Process;
 use crate::process::scheduler;
 use crate::syscall::syscall_dispatcher::CORE_LOCAL_STORAGE_TSS_RSP0_PTR_INDEX;
-use crate::{process_manager, scheduler, tss};
+use crate::{process_manager, tss};
 use crate::security::sec::{ExceptionSec, SEC_FAULT};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -161,7 +162,7 @@ impl Thread {
         };
 
         let current_process = process_manager().read().current_process();
-        let new_process = process_manager().write().create_process();
+        let new_process = process_manager().write().create_process(name.into());
         let pid = new_process.id();
 
         info!("load_application: pid = {pid}, name = {name}");
@@ -311,6 +312,8 @@ impl Thread {
         let mut stacks = self.stacks.lock();
 
         // init stack with 0s
+        info!("Stack capacity: {}", stacks.kernel_stack.capacity());
+        info!("Addr: {:x}", stacks.kernel_stack.as_ptr() as u64);
         for _ in 0..stacks.kernel_stack.capacity() {
             stacks.kernel_stack.push(0);
         }
@@ -390,10 +393,12 @@ impl Thread {
             .iter()
             .filter(|header| header.p_type == elf64::program_header::PT_LOAD)
             .try_for_each(|header| {
-                if header.p_vaddr == 0 || header.p_memsz == 0 {
+
+                if header.p_type != elf64::program_header::PT_LOAD || header.p_vaddr == 0 || header.p_memsz == 0 || header.p_filesz > header.p_memsz {
                     warn!("skipping empty ELF section {header:?}");
                     return Ok(());
                 }
+
                 // Calc total number of pages for .text and .bss = 'p_memsz'
                 let total_page_count = header.p_memsz.div_ceil(PAGE_SIZE.try_into().unwrap());
 

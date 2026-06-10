@@ -5,6 +5,7 @@ extern crate alloc;
 use core::{fmt::Display, net::{IpAddr, Ipv6Addr, SocketAddr}};
 
 use alloc::{collections::btree_map::BTreeMap, format, string::String, vec::Vec};
+use concurrent::thread;
 use httparse::{EMPTY_HEADER, Request};
 use naming::{open, read, shared_types::OpenOptions};
 use network::{NetworkError, TcpListener, TcpStream};
@@ -22,21 +23,24 @@ fn main() {
     
     let mut listener = TcpListener::bind(SocketAddr::new(ip, port))
         .expect("failed to bind socket");
-    let mut buffer: [u8; 4096] = [0; 4096];
     loop {
+        // TODO: if we get many concurrent requests, they may fail
+        // this is probably because we have no backlog
         if let Ok(client) = listener.accept() {
-            println!("got a connection from {}", client.peer_addr());
-            buffer.fill(0);
-            if let Ok(len) = client.read(&mut buffer) {
-                let mut headers = [EMPTY_HEADER; 64];
-                let mut request = Request::new(&mut headers);
-                match request.parse(&buffer[0..len]) {
-                    Ok(_body_start) => if let Err(e) = handle(request, webroot).send_to(client) {
-                        println!("couldn't send reponse to client: {:?}", e);
-                    },
-                    Err(e) => println!("couldn't parse client request: {:?}", e),
+            thread::create(|| {
+                println!("got a connection from {}", client.peer_addr());
+                let mut buffer: [u8; 4096] = [0; 4096];
+                if let Ok(len) = client.read(&mut buffer) {
+                    let mut headers = [EMPTY_HEADER; 64];
+                    let mut request = Request::new(&mut headers);
+                    match request.parse(&buffer[0..len]) {
+                        Ok(_body_start) => if let Err(e) = handle(request, webroot).send_to(client) {
+                            println!("couldn't send reponse to client: {:?}", e);
+                        },
+                        Err(e) => println!("couldn't parse client request: {:?}", e),
+                    }
                 }
-            }
+            });
         }
     }
 }

@@ -23,8 +23,8 @@ impl InterruptHandler for VirtioInterruptHandler {
                 }
 
                 if !st.is_empty() {
-                    let q = st.contains(InterruptStatus::QUEUE_INTERRUPT);
-                    let c = st.contains(InterruptStatus::DEVICE_CONFIGURATION_INTERRUPT);
+                    let _q = st.contains(InterruptStatus::QUEUE_INTERRUPT);
+                    let _c = st.contains(InterruptStatus::DEVICE_CONFIGURATION_INTERRUPT);
                     //info!("virtio-gpu irq: queue={}, config={}", q, c);
                 }
             }
@@ -53,7 +53,7 @@ impl InterruptHandler for VirtioInterruptHandler {
         // Sound Handler
         if let Some(sound_dev) = virtio_sound() {
             if let Some(mut sound_driver) = sound_dev.try_lock() {
-                let status = sound_driver.ack_interrupt();
+                let _status = sound_driver.ack_interrupt();
                 // if !status.is_empty() {
                 //     info!("virtio-sound irq acknowledged.");
                 // }

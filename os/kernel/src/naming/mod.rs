@@ -6,6 +6,9 @@ mod tmpfs;
 mod lookup;
 mod traits;
 
+mod procfs;
+mod mount;
+
 pub mod virtual_objects;
 
 pub use traits::{PseudoFileObject, PseudoType};

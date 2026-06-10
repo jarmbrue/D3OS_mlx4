@@ -1,3 +1,4 @@
+use crate::process::core_local_storage::scheduler;
 /* ╔═════════════════════════════════════════════════════════════════════════╗
    ║ Module: sys_concurrent                                                  ║
    ╟─────────────────────────────────────────────────────────────────────────╢
@@ -7,7 +8,7 @@
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
 use crate::process::thread::{ProcessLoadError, Thread};
-use crate::{process_manager, scheduler};
+use crate::{process_manager};
 use alloc::format;
 use alloc::slice;
 use alloc::sync::Arc;
@@ -17,8 +18,11 @@ use core::str::from_utf8;
 use syscall::return_vals::{self, Errno};
 use x86_64::VirtAddr;
 
-pub extern "sysv64" fn sys_process_id() -> isize {
-    process_manager().read().current_process().id() as isize
+pub extern "sysv64" fn sys_process_id(destination: *mut u128) -> isize {
+    unsafe { destination.write(
+        process_manager().read().current_process().id().as_u128()
+    ) };
+    0
 }
 
 pub extern "sysv64" fn sys_process_exit() -> ! {

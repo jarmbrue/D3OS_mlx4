@@ -14,18 +14,18 @@
 
 use alloc::collections::VecDeque;
 use log::info;
+use uuid::Uuid;
 
-use crate::scheduler;
-use crate::sync::irqsave_spinlock::IrqSaveSpinlock;
+use crate::{process::core_local_storage::scheduler, sync::irqsave_spinlock::IrqSaveSpinlock};
 
 pub struct WaitQueue {
-    queue: IrqSaveSpinlock<VecDeque<(usize, usize)>>,
+    queue: IrqSaveSpinlock<VecDeque<(Uuid, usize)>>,
 }
 
 impl WaitQueue {
     pub fn new() -> WaitQueue {
         WaitQueue {
-            queue: IrqSaveSpinlock::new(VecDeque::<(usize, usize)>::new()),
+            queue: IrqSaveSpinlock::new(VecDeque::<(Uuid, usize)>::new()),
         }
     }
 

@@ -19,3 +19,4 @@ runtime = { path = "../../library/runtime" }
 network = { path = "../../library/network" }
 terminal = { path = "../../library/terminal" }
 naming = { path = "../../library/naming" }
+concurrent = { path = "../../library/concurrent" }

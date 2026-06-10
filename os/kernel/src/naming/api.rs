@@ -11,7 +11,7 @@
    ║   - touch  create a file                                                ║
    ║   - mkfifo create a named pipe                                          ║
    ╟─────────────────────────────────────────────────────────────────────────╢
-   ║ Author: Michael Schoettner, Univ. Duesseldorf, 23.12.2025               ║
+   ║ Author: Michael Schoettner, Univ. Duesseldorf, 4.4.2026                 ║
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
 
@@ -19,20 +19,25 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use log::{info, warn};
-use spin::{Mutex, Once};
+use spin::{Mutex, Once, RwLock};
 
 use super::lookup;
 use super::open_objects;
 use super::stat::Mode;
 use super::tmpfs;
 use super::traits::FileSystem;
-
-use crate::initrd;
+use super::mount::MountTable;
+use super::procfs;
 use naming::shared_types::{OpenOptions, RawDirent, SeekOrigin};
 use syscall::return_vals::Errno;
+use crate::initrd;
+use crate::naming::stat::MODE_DIR;
 
 // root of naming service
 pub(super) static ROOT: Once<Arc<dyn FileSystem>> = Once::new();
+
+// mounting system, for context switch if /proc is called
+pub(super) static MOUNTS: Once<RwLock<MountTable>> = Once::new();
 
 // current working directory
 static CWD: Mutex<String> = Mutex::new(String::new());
@@ -43,6 +48,12 @@ pub fn init() {
     ROOT.call_once(|| {
         let tmpfs = tmpfs::TmpFs::new();
 
+        // create the proc directory
+        let _proc_dir = match tmpfs.root_dir().create_dir("proc", Mode::new(MODE_DIR)) {
+                Ok(proc_dir) => proc_dir,
+                Err(_) => panic!("Failed to create proc directory in tmpfs"),
+            };
+
         for entry in initrd().entries() {
             let res = tmpfs.create_static_file(entry.filename().as_str().unwrap(), entry.data());
             if res.is_err() {
@@ -52,6 +63,15 @@ pub fn init() {
 
         Arc::new(tmpfs)
     });
+
+    // mount the Path '/proc' to the FileSystem ProcFS
+    MOUNTS.call_once(|| {
+        let mut mount = MountTable::new();
+        mount.mount("/proc", Arc::new(procfs::ProcFs::new()));
+        RwLock::new(mount)
+    });
+
+
     open_objects::open_object_table_init();
     let mut cwd = CWD.lock();
     *cwd = "/".to_string();

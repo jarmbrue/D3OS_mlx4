@@ -16,15 +16,13 @@
    ║         Univ. Duesseldorf, 2.4.2026                                     ║
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
-use alloc::format;
-use alloc::string::String;
 use core::fmt::{Debug, Formatter};
 use core::ptr;
 use log::{info, trace};
 use spin::Mutex;
 use x86_64::PhysAddr;
 use x86_64::structures::paging::frame::PhysFrameRange;
-use x86_64::structures::paging::{PhysFrame, Size4KiB};
+use x86_64::structures::paging::PhysFrame;
 
 use crate::memory::PAGE_SIZE;
 use crate::memory::dram;
@@ -69,15 +67,8 @@ pub(super) fn allocator_locked() -> bool {
     PAGE_FRAME_ALLOCATOR.is_locked()
 }
 
-/// Helper function to convert a u64 address to a PhysFrame.
-/// The given address is aligned up to the page size (4 KiB).
-pub(super) fn frame_from_u64(addr: u64) -> Result<PhysFrame<Size4KiB>, x86_64::structures::paging::page::AddressNotAligned> {
-    let pa = PhysAddr::new(addr).align_up(PAGE_SIZE as u64);
-    PhysFrame::from_start_address(pa)
-}
-
 /// Insert an available memory `region` obtained during the boot process.
-pub fn mark_avail(mut region: PhysFrameRange) {
+fn mark_avail(mut region: PhysFrameRange) {
     // Make sure, the first page is not inserted to avoid null pointer panics
     if region.start.start_address() == PhysAddr::zero() {
         let first_page = PhysFrame::from_start_address(PhysAddr::new(PAGE_SIZE as u64)).unwrap();
@@ -89,9 +80,7 @@ pub fn mark_avail(mut region: PhysFrameRange) {
         region.start = first_page; // Cut first page out of region and continue
     }
 
-    unsafe {
-        free(region);
-    }
+    free(region);
 }
 
 /// Allocate `frame_count` contiguous page frames.
@@ -115,15 +104,15 @@ pub(super) fn remove_dev_mem(addr: u64, frame_count: usize) -> Result<Option<Phy
 */
 /// Free a contiguous range of page `frames`.
 /// Unsafe because invalid parameters may break the list allocator.
-pub(super) unsafe fn free(frames: PhysFrameRange) {
+pub(super) fn free(frames: PhysFrameRange) {
     unsafe {
         PAGE_FRAME_ALLOCATOR.lock().free_block(frames);
     }
 }
 
 /// Get a dump of the current free list.
-pub fn dump() -> String {
-    format!("{:?}", PAGE_FRAME_ALLOCATOR.lock())
+pub(super) fn dump() {
+    info!("{:?}", PAGE_FRAME_ALLOCATOR.lock());
 }
 
 /// Entry in the free list.

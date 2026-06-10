@@ -26,7 +26,7 @@ use x86_64::structures::paging::page::{PageRange,Page};
 use x86_64::structures::paging::Size4KiB;
 use log::{info, debug};
 
-use crate::memory::{MemorySpace, PAGE_SIZE, frames};
+use crate::memory::{self, MemorySpace, PAGE_SIZE};
 
 /// Helper function to convert a u64 address to a PhysFrame.
 pub fn page_from_u64(addr: u64) -> Result<Page<Size4KiB>, x86_64::structures::paging::page::AddressNotAligned> {
@@ -61,7 +61,7 @@ impl Paging {
 
     /// Create a new root page table for address space `self` with the given `depth`
     pub(super) fn new(depth: usize) -> Self {
-        let table_addr = frames::alloc(1).start;
+        let table_addr = memory::alloc_frames(1).start;
         let root_table = table_addr.start_address().as_u64() as *mut PageTable;
         unsafe { root_table.as_mut().unwrap().zero(); }
 
@@ -215,7 +215,7 @@ impl Paging {
                     continue;
                 }
 
-                let phys_frame = frames::alloc(1).start;
+                let phys_frame = memory::alloc_frames(1).start;
                 let flags = source[index].flags();
                 target_entry.set_frame(phys_frame, flags);
 
@@ -243,7 +243,7 @@ impl Paging {
             for entry in table.iter_mut().skip(start_index) {
                 let next_level_table;
                 if entry.is_unused() { // Entry is empty -> Allocate new page frame
-                    let phys_frame = frames::alloc(1).start;
+                    let phys_frame = memory::alloc_frames(1).start;
                     entry.set_frame(phys_frame, flags);
 
                     next_level_table = unsafe { (entry.addr().as_u64() as *mut PageTable).as_mut().unwrap() };
@@ -298,7 +298,7 @@ impl Paging {
 
                 if Paging::is_table_empty(next_level_table) {
                     let table_frame = PhysFrame::from_start_address(entry.addr()).unwrap();
-                    unsafe { frames::free(PhysFrameRange { start: table_frame, end: table_frame + 1 }); }
+                    memory::free_frames(PhysFrameRange { start: table_frame, end: table_frame + 1 }); 
                     entry.set_unused();
                 }
 
@@ -318,7 +318,7 @@ impl Paging {
                 if !entry.is_unused() {
                     if free_physical {
                         let frame = PhysFrame::from_start_address(entry.addr()).unwrap();
-                        unsafe { frames::free(PhysFrameRange { start: frame, end: frame + 1 }); }
+                        memory::free_frames(PhysFrameRange { start: frame, end: frame + 1 });
                     }
 
                     entry.set_unused();
@@ -348,7 +348,7 @@ impl Paging {
         table.iter_mut().for_each(|entry| entry.set_unused());
 
         let table_frame = PhysFrame::from_start_address(PhysAddr::new(ptr::from_ref(table) as u64)).unwrap();
-        unsafe { frames::free(PhysFrameRange { start: table_frame, end: table_frame + 1 }); }
+        memory::free_frames(PhysFrameRange { start: table_frame, end: table_frame + 1 });
     }
 
     /// Internal recursive function to set `flags` in page table entries for a range of `pages`.
@@ -435,7 +435,7 @@ impl Paging {
                 break;
             }
 
-            let phys_frame = frames::alloc(1).start;
+            let phys_frame = memory::alloc_frames(1).start;
             //info!("map_user: page: {:?} phys_frame: {:?}", pages.start + count as u64, phys_frame);
             entry.set_frame(phys_frame, flags);
         }

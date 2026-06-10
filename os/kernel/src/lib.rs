@@ -19,6 +19,9 @@
 #![feature(fn_traits)]
 #![feature(associated_type_defaults)]
 
+// For ipi.rs volatile_load and volatile_store
+#![feature(core_intrinsics)]
+
 use crate::device::apic::Apic;
 use crate::device::cpu::Cpu;
 use crate::device::pci::PciBus;
@@ -33,10 +36,13 @@ use crate::memory::PAGE_SIZE;
 use crate::memory::acpi_handler::AcpiHandler;
 use crate::memory::heap::KernelAllocator;
 use crate::process::process_manager::ProcessManager;
-use crate::process::scheduler::Scheduler;
+use crate::process::scheduler::{MessageItem, PerCpuRef};
 use crate::syscall::sys_graphic::LfbInfo;
-use crate::syscall::syscall_dispatcher::CoreLocalStorage;
+
+use alloc::boxed::Box;
 use alloc::format;
+use alloc::vec::Vec;
+use chrono::{DateTime, FixedOffset, TimeDelta};
 use graphic::color::{BLUE, WHITE};
 use ::log::{Level, Log, Record, error};
 use acpi::AcpiTables;
@@ -52,6 +58,8 @@ use graphic::lfb::LFB;
 use multiboot2::ModuleTag;
 use spin::{Mutex, Once, RwLock};
 use tar_no_std::TarArchiveRef;
+use thingbuf::mpsc;
+use thingbuf::mpsc::Receiver;
 use x86_64::PhysAddr;
 use x86_64::structures::gdt::GlobalDescriptorTable;
 use x86_64::structures::idt::InterruptDescriptorTable;
@@ -62,9 +70,6 @@ use x86_64::structures::tss::TaskStateSegment;
 
 extern crate alloc;
 extern crate llfree;
-
-/*#[cfg(any(kernel_test, kernel_bench))]
-use tests::test_runner; */
 
 #[macro_use]
 pub mod device;
@@ -79,10 +84,10 @@ pub mod process;
 pub mod storage;
 pub mod syscall;
 pub mod sync;
+pub mod boot_ap;
+pub mod ipi;
 pub mod infiniband;
 pub mod security;
-/*#[cfg(any(kernel_test, kernel_bench))]
-pub mod tests; */
 
 pub mod built_info {
     // The file has been placed there by the build script
@@ -161,6 +166,35 @@ pub fn efi_services_available() -> bool {
     uefi::table::system_table_raw().is_some()
 }
 
+/// Get the current time
+pub fn now() -> Option<DateTime<FixedOffset>> {
+    match uefi::runtime::get_time() {
+        Ok(time) => {
+            if time.is_valid().is_ok() {
+                let timezone = match time.time_zone() {
+                    Some(timezone) => {
+                        let delta = TimeDelta::try_minutes(timezone as i64).expect("Failed to create TimeDelta struct from timezone");
+                        if timezone >= 0 {
+                            format!("+{:0>2}:{:0>2}", delta.num_hours(), delta.num_minutes() % 60)
+                        } else {
+                            format!("-{:0>2}:{:0>2}", delta.num_hours(), delta.num_minutes() % 60)
+                        }
+                    }
+                    None => "Z".into(),
+                };
+
+                Some(
+                    DateTime::parse_from_rfc3339(format!("{}-{:0>2}-{:0>2}T{:0>2}:{:0>2}:{:0>2}.{:0>9}{}", time.year(), time.month(), time.day(), time.hour(), time.minute(), time.second(), time.nanosecond(), timezone).as_str())
+                    .expect("Failed to parse date from EFI runtime services")
+                )
+            } else {
+                None
+            }
+        }
+        Err(_) => None
+    }
+}
+
 /// Global Descriptor Table.
 /// Needed to set up basic segmentation (flat model) and the TSS.
 static GDT: Mutex<GlobalDescriptorTable> = Mutex::new(GlobalDescriptorTable::new());
@@ -186,15 +220,40 @@ pub fn idt() -> &'static Mutex<InterruptDescriptorTable> {
     &IDT
 }
 
-/// Core Local Storage.
-/// Contains information that is needed by the syscall handler.
-/// It is never accessed directly, but via the swapgs instruction.
-/// 'boot.rs' sets up the gs base register with a pointer to this struct.
-/// Once multicore is implemented, we need one of these per core.
-static CORE_LOCAL_STORAGE: Mutex<CoreLocalStorage> = Mutex::new(CoreLocalStorage::new());
+/// Global PERCPU Reference Table indexed by core_id
+static PER_CPU_REF: Once<&'static [PerCpuRef]> = Once::new();
+static PER_CPU_RX: Once<&'static [Mutex<Option<Receiver<Option<MessageItem>>>>]> = Once::new();
 
-pub fn core_local_storage() -> &'static Mutex<CoreLocalStorage> {
-    &CORE_LOCAL_STORAGE
+/// Called only once by the boot processor core during startup to initialize the global tables
+pub fn per_cpu_init(cpu_count: usize, capacity: usize) {
+    let mut publics = Vec::with_capacity(cpu_count);
+    let mut receivers = Vec::with_capacity(cpu_count);
+
+    for _ in 0..cpu_count {
+        let (tx, rx) = mpsc::channel::<Option<MessageItem>>(capacity);
+        publics.push(PerCpuRef::new(tx));
+        receivers.push(Mutex::new(Some(rx)));
+    }
+
+    let leaked_cpu_slice: &'static [PerCpuRef] = Box::leak(publics.into_boxed_slice());
+    PER_CPU_REF.call_once(|| leaked_cpu_slice);
+    let leaked_receiver_slice: &'static [Mutex<Option<Receiver<Option<MessageItem>>>>]
+        = Box::leak(receivers.into_boxed_slice());
+    PER_CPU_RX.call_once(|| leaked_receiver_slice);
+}
+
+/// Called only once by each owner core during startup to move the RX into its CLS
+pub fn take_inbox_receiver(id: usize) -> Receiver<Option<MessageItem>> {
+    let bank = PER_CPU_RX.get().expect("per_cpu_init not called");
+    let mut guard = bank[id].lock();
+    guard.take().expect("Receiver already taken")
+}
+
+/// Returns a reference to the PerCpuSched struct of the core with the given id
+#[inline]
+pub fn per_cpu_ref(id: usize) -> &'static PerCpuRef {
+    let slice = PER_CPU_REF.get().expect("per_cpu_init not called");
+    &slice[id]
 }
 
 /// ACPI Tables.
@@ -283,16 +342,6 @@ static PROCESS_MANAGER: RwLock<ProcessManager> = RwLock::new(ProcessManager::new
 
 pub fn process_manager() -> &'static RwLock<ProcessManager> {
     &PROCESS_MANAGER
-}
-
-/// Scheduler.
-/// Manages the execution of threads and switches between them.
-/// Allows to access active threads, put threads to sleep, exit/kill threads and creates new ones.
-static SCHEDULER: Once<Scheduler> = Once::new();
-
-pub fn scheduler() -> &'static Scheduler {
-    SCHEDULER.call_once(Scheduler::new);
-    SCHEDULER.get().unwrap()
 }
 
 /// Interrupt Dispatcher.
@@ -542,13 +591,3 @@ pub fn get_time_in_us() -> u64 {
     };
     cpu().rdtsc() / cycles_per_us
 }
-
-/*#[cfg(any(kernel_test, kernel_bench))]
-pub fn init_test_runner() {
-    test_runner::TestRunner::new();
-}
-
-#[cfg(any(kernel_test, kernel_bench))]
-pub fn run_tests() {
-    test_runner::get_test_runner().expect("Trying to access Test Runner before init!").lock().exec();
-} */

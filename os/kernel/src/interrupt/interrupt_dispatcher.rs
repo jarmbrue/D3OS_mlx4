@@ -2,7 +2,8 @@ use crate::interrupt::interrupt_handler::InterruptHandler;
 use crate::memory::MemorySpace;
 use crate::memory;
 use crate::memory::vma::VmaType;
-use crate::{apic, idt, interrupt_dispatcher, scheduler};
+use crate::process::core_local_storage::scheduler;
+use crate::{apic, idt, interrupt_dispatcher};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::ops::Deref;
@@ -10,11 +11,28 @@ use core::ptr;
 use log::{error, info, trace};
 use spin::Mutex;
 use x86_64::registers::control::Cr2;
-use x86_64::set_general_handler;
+use x86_64::{PrivilegeLevel, set_general_handler};
 use x86_64::structures::idt::InterruptStackFrame;
 use x86_64::structures::paging::page::PageRange;
 use x86_64::structures::paging::{Page, PageTableFlags};
 use crate::security::sec::{get_exception_table, fixup_fn};
+
+
+//----PROCFS SUPPORT ------------------------------------------------------------------------//
+// needed to know, if a request was in User- or Kernel-Mode
+// ONLY WORKS ON SINGLE CORE, IF MULTICORE IS PLANNED THIS NEEDS TO BE DEFINED FOR EACH CPU
+use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::Ordering::Relaxed;
+
+static LAST_IRQ_FROM_USER: AtomicBool = AtomicBool::new(false);
+
+pub fn last_irq_from_user() -> bool {
+    LAST_IRQ_FROM_USER.load(Ordering::Relaxed)
+}
+//------------------------------------------------------------------------------------------//
+
+
+
 
 #[repr(u8)]
 #[derive(PartialEq, PartialOrd, Copy, Clone, Debug)]
@@ -66,6 +84,7 @@ pub enum InterruptVector {
     // Possibly some other interrupts supported by IO APICs
 
     // Local APIC interrupts (247 - 254)
+    Reschedule = 0xf1, // dedicated reschedule IPI
     Cmci = 0xf8,
     ApicTimer = 0xf9,
     Thermal = 0xfa,
@@ -124,6 +143,7 @@ impl TryFrom<u8> for InterruptVector {
             value if value == InterruptVector::PrimaryAta as u8 => Ok(InterruptVector::PrimaryAta),
             value if value == InterruptVector::SecondaryAta as u8 => Ok(InterruptVector::SecondaryAta),
 
+            value if value == InterruptVector::Reschedule as u8 => Ok(InterruptVector::Reschedule),
             value if value == InterruptVector::Cmci as u8 => Ok(InterruptVector::Cmci),
             value if value == InterruptVector::ApicTimer as u8 => Ok(InterruptVector::ApicTimer),
             value if value == InterruptVector::Thermal as u8 => Ok(InterruptVector::Thermal),
@@ -159,6 +179,21 @@ pub fn setup_idt() {
         // We need to obtain a static reference to the IDT for the following operation.
         // We know, that it has a static lifetime, since it is are declared as a static variable in 'kernel/mod.rs'.
         // However, since it is hidden behind a Mutex, the borrow checker does not see it with a static lifetime.
+        let idt_ref = ptr::from_ref(idt.deref()).as_ref().unwrap();
+        idt_ref.load();
+    }
+}
+
+// gets called once during interrupt initialization (after dispatcher exists)
+pub fn install_reschedule_ipi_handler() {
+    interrupt_dispatcher().assign(InterruptVector::Reschedule, Box::new(crate::interrupt::interrupt_handler::ReschedIpiHandler));
+}
+
+//Similar method for Application Cores
+#[unsafe(no_mangle)]
+pub extern "C" fn setup_ap_idt() {
+    let idt = idt().lock();
+    unsafe {
         let idt_ref = ptr::from_ref(idt.deref()).as_ref().unwrap();
         idt_ref.load();
     }
@@ -208,8 +243,8 @@ fn handle_page_fault(frame: InterruptStackFrame, _index: u8, error: Option<u64>)
             if memory::frame_allocator_locked() {
                 panic!("Page Fault, cannot get lock to frame allocator\nError code: [{:?}]\nAddress: [0x{:0>16x}]", error, fault_addr);
             }
-
-            thread.process().virtual_address_space.map_partial_vma(
+            let proc = thread.process();
+            proc.virtual_address_space.map_partial_vma(
                 &stack,
                 PageRange {
                     start: fault_page,
@@ -218,6 +253,10 @@ fn handle_page_fault(frame: InterruptStackFrame, _index: u8, error: Option<u64>)
                 MemorySpace::User,
                 PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE,
             );
+
+            // ProcFS, Count new pages, used for calculating mem-usage
+            proc.account_rss();
+            
             return ;
         }
 
@@ -227,13 +266,17 @@ fn handle_page_fault(frame: InterruptStackFrame, _index: u8, error: Option<u64>)
             if memory::frame_allocator_locked() {
                 panic!("Page Fault, cannot get lock to frame allocator\nError code: [{:?}]\nAddress: [0x{:0>16x}]", error, fault_addr);
             }
-
-            thread.process().virtual_address_space.map_partial_vma(
+            let proc = thread.process();
+            proc.virtual_address_space.map_partial_vma(
                 &heap,
                 PageRange { start: fault_page, end: fault_page + 1 },
                 MemorySpace::User,
                 PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE,
             );
+            
+            // ProcFS, count new pages, used for calculating mem-usage
+            proc.account_rss();
+            
             return ;
         }
     }
@@ -242,8 +285,8 @@ fn handle_page_fault(frame: InterruptStackFrame, _index: u8, error: Option<u64>)
     panic!("Page Fault!\nError code: [{:?}]\nAddress: [0x{:0>16x}]\n{:?}", error, fault_addr, frame);
 }
 
-fn handle_interrupt(_frame: InterruptStackFrame, index: u8, _error: Option<u64>) {
-    interrupt_dispatcher().dispatch(index);
+fn handle_interrupt(frame: InterruptStackFrame, index: u8, _error: Option<u64>) {
+    interrupt_dispatcher().dispatch(frame, index);
 }
 
 impl InterruptDispatcher {
@@ -263,7 +306,7 @@ impl InterruptDispatcher {
         }
     }
 
-    pub fn dispatch(&self, interrupt: u8) {
+    pub fn dispatch(&self, frame: InterruptStackFrame, interrupt: u8) {
         // if we log the timer interrupt, it just spams the log and nothing else happens
         if interrupt != 32 {
             trace!("handling interrupt {interrupt}");
@@ -286,6 +329,12 @@ impl InterruptDispatcher {
 
         if handler_vec.as_ref().unwrap().is_empty() {
             error!("Interrupt Dispatcher: No handler registered for interrupt [{interrupt}]!");
+        }
+
+        // ProcFS, saving the Mode (Kernel or User) for the ApicTimer
+        if interrupt == InterruptVector::ApicTimer as u8 { 
+            let from_user =  frame.code_segment.rpl() == PrivilegeLevel::Ring3;
+            LAST_IRQ_FROM_USER.store(from_user, Relaxed);
         }
 
         for handler in handler_vec.unwrap().iter_mut() {

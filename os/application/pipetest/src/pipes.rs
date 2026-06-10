@@ -22,7 +22,7 @@ const FIFO_PATH: &str = "/mypipe";
 
 #[unsafe(no_mangle)]
 pub fn main() {
-    let process = process::current().unwrap();
+    let process = process::current();
     let thread = thread::current().unwrap();
     let main_tid = thread.id();
     println!("MAIN: pid={}, tid={}", process.id(), main_tid);
