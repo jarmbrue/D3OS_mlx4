@@ -168,4 +168,3 @@ pub fn pause() {
         asm!("pause", options(nomem, nostack));
     }
 }
-
