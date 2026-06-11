@@ -42,32 +42,6 @@ pub trait PipeObject: Debug + Send + Sync {
     fn close(&self, flags: OpenOptions);
 }
 
-pub enum PseudoType {
-    Socket,
-    Pipe,
-    // ...
-}
-
-pub trait PseudoFileObject : Send + Sync {
-    fn read(&self, _buf: &mut [u8]) -> Result<usize, Errno> {
-        Err(Errno::EBADF)
-    }
-
-    fn write(&self, _buf: &[u8]) -> Result<usize, Errno> {
-        Err(Errno::EBADF)
-    }
-
-    fn pseudo_type(&self) -> PseudoType;
-}
-
-// TODO: this isn't enforced yet !
-unsafe impl Send for PseudoFile {}
-unsafe impl Sync for PseudoFile {}
-
-pub struct PseudoFile {
-    pub ops: Arc<dyn PseudoFileObject>,
-    pub private_data: *const ()
-}
 
 /// Directory object operations
 pub trait DirectoryObject: Debug + Send + Sync {
@@ -86,7 +60,6 @@ pub enum NamedObject {
     FileObject(Arc<dyn FileObject>),
     PipeObject(Arc<dyn PipeObject>),
     DirectoryObject(Arc<dyn DirectoryObject>),
-    PseudoFileObject(Arc<PseudoFile>)
 }
 
 impl NamedObject {
@@ -113,14 +86,7 @@ impl NamedObject {
             _ => Err(Errno::EBADF),
         }
     }
-
-    pub fn as_pseudo(&self) -> Result<&Arc<PseudoFile>, Errno> {
-        match self {
-            NamedObject::PseudoFileObject(file) => Ok(file),
-            _ => Err(Errno::EBADF),
-        }
-    }
-
+    
     /// Returns `true` if it's a file.
     #[allow(dead_code)]
     pub fn is_file(&self) -> bool {
@@ -137,10 +103,6 @@ impl NamedObject {
     pub fn is_dir(&self) -> bool {
         matches!(self, NamedObject::DirectoryObject(_))
     }
-    
-    pub fn is_pseudo(&self) -> bool {
-        matches!(self, NamedObject::PseudoFileObject(_))
-    } 
 }
 
 impl fmt::Debug for NamedObject {
@@ -149,7 +111,6 @@ impl fmt::Debug for NamedObject {
             NamedObject::FileObject(file) => fmt::Debug::fmt(file, f),
             NamedObject::PipeObject(pipe) => fmt::Debug::fmt(pipe, f),
             NamedObject::DirectoryObject(dir) => fmt::Debug::fmt(dir, f),
-            _ => Ok(())
         }
     }
 }

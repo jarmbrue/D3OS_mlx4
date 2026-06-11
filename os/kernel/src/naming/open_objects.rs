@@ -4,7 +4,7 @@
    ║ Managing opened objects in a global table (OPEN_OBJECTS). And providing ║
    ║ all major functions for the naming service.                             ║
    ╟─────────────────────────────────────────────────────────────────────────╢
-   ║ Author: Michael Schoettner, Univ. Duesseldorf, 23.12.2025               ║
+   ║ Author: Michael Schoettner, Univ. Duesseldorf, 07.04.2026               ║
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
 
@@ -56,6 +56,13 @@ pub(super) fn open(path: &str, flags: OpenOptions) -> Result<usize, Errno> {
     // call the 'open' for pipes specific behavior
     if found_named_object.is_pipe() {
             found_named_object.as_pipe()?.open(flags)?; // ignore return value
+    }
+
+    // call the 'open' for a directory with flag `WRITEONLY` 
+    if found_named_object.is_dir() {
+        if flags.contains(OpenOptions::WRITEONLY) || flags.contains(OpenOptions::READWRITE) {
+            return Err(Errno::EISDIR);
+        }
     }
 
     // try to allocate an new handle
@@ -111,7 +118,7 @@ pub(super) fn read(fh: usize, buf: &mut [u8]) -> Result<usize, Errno> {
         if opened_object.named_object.is_dir() {
             return Err(Errno::EISDIR);
         }
-
+        
         Err(Errno::ENOTSUP)
     })
 }
@@ -257,9 +264,5 @@ pub struct OpenedObject {
 impl OpenedObject {
     pub fn new(named_object: Arc<NamedObject>, pos: AtomicUsize, options: OpenOptions) -> OpenedObject {
         OpenedObject { named_object, pos, options }
-    }
-
-    pub fn inner_node(&self) -> &Arc<NamedObject> {
-        &self.named_object
     }
 }

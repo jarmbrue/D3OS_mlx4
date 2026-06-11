@@ -21,7 +21,6 @@ pub(super) fn lookup_dir(path: &String) -> Result<Arc<dyn DirectoryObject>, Errn
         NamedObject::DirectoryObject(dir) => Ok(dir),
         NamedObject::FileObject(_) => Err(Errno::ENOTDIR),
         NamedObject::PipeObject(_) => Err(Errno::ENOTDIR),
-        NamedObject::PseudoFileObject(_) => Err(Errno::ENOTDIR),
     }
 }
 

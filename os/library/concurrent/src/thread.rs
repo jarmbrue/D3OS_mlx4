@@ -110,7 +110,7 @@ pub fn create(entry: impl FnOnce() + Send + 'static) -> Option<Thread> {
     match res {
         Ok(id) => Some(Thread::new(id)),
         Err(_) => None,
-    }
+    }    
 }
 
 pub fn current() -> Option<Thread> {
@@ -118,7 +118,7 @@ pub fn current() -> Option<Thread> {
     match res {
         Ok(id) => Some(Thread::new(id)),
         Err(_) => None,
-    }
+    }    
 }
 
 #[allow(dead_code)]
@@ -147,5 +147,5 @@ pub fn start_application(name: &str, args: Vec<&str>) -> Option<Thread> {
     match res {
         Ok(id) => Some(Thread::new(id)),
         Err(_) => None,
-    }
+    }    
 }

@@ -2,7 +2,8 @@
 use tock_registers::{interfaces::{Readable, Writeable}, register_structs, registers::{ReadOnly, WriteOnly}};
 
 use super::utils::MappedPages;
-use crate::{pci_bus, scheduler};
+use crate::pci_bus;
+use crate::process::core_local_storage::scheduler;
 use log::trace;
 use pci_types::EndpointHeader;
 

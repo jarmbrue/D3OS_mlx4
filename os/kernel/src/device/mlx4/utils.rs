@@ -364,7 +364,7 @@ pub fn pci_map_bar_mem(mlx3_pci_dev: &EndpointHeader, slot: u8, config_access: &
 pub fn create_cont_mapping_with_dma_flags(frame_count: usize) -> Result<PageToFrameRange, &'static str> {
     let process = process_manager().read().current_process();
     let vma = process.virtual_address_space.alloc_vma(None, frame_count as u64, MemorySpace::User, VmaType::Anonymous, "mlx4_cont").unwrap();
-    let memory = process.virtual_address_space.alloc_pf_for_vma(&vma).expect("Memory can't be allocated, since the frame allocator didn't return frames");
+    let memory = process.virtual_address_space.alloc2_pf_for_vma(&vma).expect("Memory can't be allocated, since the frame allocator didn't return frames");
     let page_range = mapped_pages_from_frames(memory);
     set_dma_flags(page_range);
 

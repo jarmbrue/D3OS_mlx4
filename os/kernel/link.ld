@@ -39,14 +39,9 @@ SECTIONS {
    .bss ALIGN (4K) :
     {
       ___BSS_START__ = .;
-      *(.bss*)
+      *(".bss*")
       ___BSS_END__ = .;
     }
-
-    .ex_table ALIGN (8) :
-    {
-        KEEP(*sec.o(.ex_table*))
-    } :data
 
     .data ALIGN (4K) :
     {

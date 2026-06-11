@@ -48,7 +48,6 @@ use crate::process::process::Process;
 use crate::process::scheduler;
 use crate::syscall::syscall_dispatcher::CORE_LOCAL_STORAGE_TSS_RSP0_PTR_INDEX;
 use crate::{process_manager, tss};
-use crate::security::sec::{ExceptionSec, SEC_FAULT};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::arch::naked_asm;
@@ -103,10 +102,6 @@ pub struct Thread {
     entry: extern "sysv64" fn(),
     state: AtomicU8,
     wake_pending: AtomicBool, // false => allowed to block; true => do NOT block (wake pending)
-    /// per thread user access flag, could be replaced later if the interrupt
-    /// backend supports trap frames, instead of only passing in the interrupt frame
-    /// then we could modify rax, and rip inplace
-    copy_faulted: u8
 }
 
 impl Stacks {
@@ -145,7 +140,6 @@ impl Thread {
             entry,
             state: AtomicU8::new(ThreadState::Created.as_u8()),
             wake_pending: AtomicBool::new(false),
-            copy_faulted: 0,
         };
 
         thread.prepare_kernel_stack();
@@ -213,7 +207,6 @@ impl Thread {
             entry,
             state: AtomicU8::new(ThreadState::Created.as_u8()),
             wake_pending: AtomicBool::new(false),
-            copy_faulted: 0,
         };
 
         thread.prepare_kernel_stack();
@@ -433,7 +426,7 @@ impl Thread {
                     let bss_page_count = total_page_count - code_page_count;
                     let dest_page_start = vma.range.start.start_address().as_u64();
                     let mut dest_offset: u64 = code_page_count as u64 * PAGE_SIZE as u64;
-
+                    
                     // copy remaining pages
                     for _i in 0..bss_page_count {
                         // get destination physical address
@@ -513,13 +506,6 @@ impl Thread {
                 offset += arg.len() + 1;
             }
         }
-
-    }
-    pub fn copy_faulted(&mut self, fault: u8) { self.copy_faulted = fault }
-
-    pub fn faulted(&self) -> Result<(), ExceptionSec> {
-        if self.copy_faulted == SEC_FAULT { Err(ExceptionSec::CopyException) }
-        else { Ok(()) }
     }
 
     /// Get a pointer to the top of the given stack.

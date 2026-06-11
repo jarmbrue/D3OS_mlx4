@@ -58,7 +58,7 @@ args = [
     "-object", "filter-dump,id=filter1,netdev=rtl8139,file=rtl8139.dump",
 
     # Infiniband configuration
-    "-device vfio-pci,host=${CARGO_INFINIBAND_BUS_ID}",
+    #"-device vfio-pci,host=${CARGO_INFINIBAND_BUS_ID}",
 
     # VirtIO Devices
     "-display", "${QEMU_DISPLAY}",

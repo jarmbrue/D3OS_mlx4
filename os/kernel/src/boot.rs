@@ -32,10 +32,6 @@ use crate::{
 };
 use crate::{built_info, memory, naming, network, storage, infiniband};
 
-/*
-#[cfg(any(kernel_test, kernel_bench))]
-use crate::{init_test_runner, run_tests}; */
-
 use alloc::format;
 use alloc::string::ToString;
 use alloc::sync::Arc;
@@ -169,7 +165,7 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     // Initialize the page frame allocator
     memory::init();
     memory::dump();
-
+  
     // Initialize CPU information
     init_cpu_info();
 

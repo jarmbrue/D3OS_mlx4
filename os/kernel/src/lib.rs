@@ -87,7 +87,6 @@ pub mod sync;
 pub mod boot_ap;
 pub mod ipi;
 pub mod infiniband;
-pub mod security;
 
 pub mod built_info {
     // The file has been placed there by the build script
@@ -98,7 +97,7 @@ pub mod built_info {
 fn panic(info: &PanicInfo) -> ! {
     // make sure we never exit
     interrupts::disable();
-
+    
     // write the panic directly out to the serial port
     // this needs no allocations and should always work
     unsafe { logger().force_unlock() };
@@ -112,7 +111,7 @@ fn panic(info: &PanicInfo) -> ! {
         .build();
 
     logger().log(&record);
-
+        
     // if we do have a terminal, try to print the error there, too
     let lfb_info = BUFFERED_LFB.get().map(|lfb| {
         unsafe { lfb.force_unlock() };
@@ -525,7 +524,7 @@ pub fn buffered_lfb() -> &'static Mutex<BufferedLFB> {
 
 /// Framebuffer information
 /// Remembered from boot, to be able to map to User-Space
-///
+/// 
 /// Author: Sebastian Keller
 static LFB_INFO: Once<LfbInfo> = Once::new();
 
@@ -547,7 +546,7 @@ pub fn lfb_info() -> &'static LfbInfo {
 
 /// System information
 /// Remembered from boot, to be able to expose to User-Space
-///
+/// 
 /// Author: Sebastian Keller
 pub struct BootInfo {
     pub bootloader_name: String,
