@@ -4,9 +4,11 @@ use core::mem::size_of;
 
 use crate::memory::PAGE_SIZE;
 use alloc::{format, string::String, vec::Vec};
+use core::cmp::min;
 use byteorder::BigEndian;
 use tock_registers::{register_bitfields, register_structs, registers::WriteOnly};
 use core::fmt::Debug;
+use core::ops::Shl;
 use log::{debug, trace, warn};
 use modular_bitfield_msb::{
     bitfield,
@@ -14,8 +16,9 @@ use modular_bitfield_msb::{
 };
 use rdma::ibv_mtu;
 use x86_64::structures::paging::{page::Page, Size4KiB};
+use x86_64::structures::paging::frame::PhysFrameRange;
 use zerocopy::{AsBytes, FromBytes, U16, U64};
-
+use crate::memory;
 use super::{
     cmd::{CommandInterface, MadDemuxOpcodeModifier, Opcode},
     device::{DEFAULT_UAR_PAGE_SHIFT, PAGE_SHIFT},
@@ -51,40 +54,17 @@ impl Firmware {
     }
 
     pub(super) fn map_area(&self, cmd: &mut CommandInterface) -> Result<MappedFirmwareArea, &'static str> {
-        const MAX_CHUNK_LOG2: u32 = 18;
         trace!("mapping firmware area...");
 
-        let size = PAGE_SIZE * usize::from(self.pages);
-        let (pages, physical) = utils::create_cont_mapping_with_dma_flags(utils::pages_required(size))?.fetch_in_addr()?;
-        let mut align = physical.as_u64().trailing_zeros();
-        if align > MAX_CHUNK_LOG2 {
-            trace!("alignment greater than max chunk size, defaulting to 256KB");
-            align = MAX_CHUNK_LOG2;
-        }
+        let frame_ranges = alloc_frames_in_chunks(self.pages.get() as usize, 6);
+        assert!(frame_ranges.len() * size_of::<VirtualPhysicalMapping>() <= PAGE_SIZE, "Too many chunks for one Mailbox"); // TODO do multiple calls to MapFa
+        let vpms = vpms_from_frames(frame_ranges.as_slice());
 
-        let mut num_entries = size / (1 << align);
-        if size % (1 << align) != 0 {
-            num_entries += 1;
-        }
-        // batch as many vpm entries as fit in a mailbox to make bootup faster
-        let mut vpms = [VirtualPhysicalMapping::default(); 256];
-        let mut pointer = physical;
-        while num_entries > 0 {
-            let mut chunk = PAGE_SIZE / size_of::<VirtualPhysicalMapping>();
-            if num_entries < chunk {
-                chunk = num_entries;
-            }
-            for i in 0..chunk {
-                vpms[i].physical_address.set(pointer.as_u64() | (align as u64 - ICM_PAGE_SHIFT as u64));
-                pointer += 1 << align;
-            }
-            let _: () = cmd.execute_command(Opcode::MapFa, (), vpms.as_bytes(), chunk.try_into().unwrap())?;
-            num_entries -= chunk;
-        }
-        trace!("mapped {} pages for firmware area", self.pages);
+        let _: () = cmd.execute_command(Opcode::MapFa, (), vpms.as_bytes(), vpms.len() as u32)?;
+        trace!("mapped {} pages for firmware area in {} chunks", self.pages, vpms.len());
 
         Ok(MappedFirmwareArea {
-            memory: Some((pages, physical)),
+            frame_ranges,
             icm_aux_area: None,
         })
     }
@@ -119,7 +99,7 @@ impl core::fmt::Debug for Firmware {
 pub(super) struct VirtualPhysicalMapping {
     // actually just 52 bits
     pub(super) virtual_address: U64<BigEndian>,
-    // actually just 52 bits and then log2size
+    // actually just 52 bits and the lower 5 bits are log2size
     pub(super) physical_address: U64<BigEndian>,
 }
 
@@ -127,7 +107,7 @@ pub(super) struct VirtualPhysicalMapping {
 ///
 /// Instead of dropping, please unmap the area from the card.
 pub(super) struct MappedFirmwareArea {
-    memory: Option<utils::PageToFrameMapping>,
+    frame_ranges: Vec<PhysFrameRange>,
     icm_aux_area: Option<MappedIcmAuxiliaryArea>,
 }
 
@@ -183,8 +163,6 @@ impl MappedFirmwareArea {
         trace!("unmapping firmware area...");
         let _: () = cmd.execute_command(Opcode::UnmapFa, (), (), 0)?;
         trace!("successfully unmapped firmware area");
-        // actually free the memory
-        self.memory.take().unwrap();
         Ok(())
     }
 
@@ -205,44 +183,52 @@ impl MappedFirmwareArea {
         }
         // TODO: merge this with Firmware::map_area?
         trace!("mapping ICM auxiliary area...");
-        let (pages, physical) = utils::create_cont_mapping_with_dma_flags(aux_pages as usize)?.fetch_in_addr()?;
 
-        let mut align = physical.as_u64().trailing_zeros();
-        if align > PAGE_SIZE.ilog2() {
-            trace!("alignment greater than max chunk size, defaulting to 256KB");
-            align = PAGE_SIZE.ilog2();
-        }
-        let size = aux_pages * PAGE_SIZE as u64;
-        let mut num_entries = usize::try_from(size).unwrap() / (1 << align);
-        if size % (1 << align) != 0 {
-            num_entries += 1;
-        }
         // batch as many vpm entries as fit in a mailbox to make bootup faster
-        let mut vpms = [VirtualPhysicalMapping::default(); 256];
-        let mut pointer = physical;
-        while num_entries > 0 {
-            let mut chunk = PAGE_SIZE / size_of::<VirtualPhysicalMapping>();
-            if num_entries < chunk {
-                chunk = num_entries;
-            }
-            for i in 0..chunk {
-                vpms[i].physical_address.set(pointer.as_u64() | (align as u64 - ICM_PAGE_SHIFT as u64));
-                pointer += 1 << align;
-            }
-            let _: () = cmd.execute_command(Opcode::MapIcmAux, (), vpms.as_bytes(), chunk.try_into().unwrap())?;
-            num_entries -= chunk;
-        }
-        trace!("mapped {} pages for ICM auxiliary area", aux_pages);
+        let frame_ranges = alloc_frames_in_chunks(aux_pages as usize, 6);
+        assert!(frame_ranges.len() * size_of::<VirtualPhysicalMapping>() <= PAGE_SIZE, "Too many chunks for one Mailbox"); // TODO do multiple calls to MapIcmAux
+        let vpms = vpms_from_frames(frame_ranges.as_slice());
 
-        self.icm_aux_area = Some(MappedIcmAuxiliaryArea::new(pages, physical));
+        let _: () = cmd.execute_command(Opcode::MapIcmAux, (), vpms.as_bytes(), vpms.len() as u32)?;
+        trace!("mapped {} pages for ICM auxiliary area in {} chunks", aux_pages, vpms.len());
+
+        self.icm_aux_area = Some(MappedIcmAuxiliaryArea::new(frame_ranges));
         Ok(self.icm_aux_area.as_ref().unwrap())
     }
 }
 
+fn alloc_frames_in_chunks(frame_count: usize, chunk_size_log: usize) -> Vec<PhysFrameRange> {
+    let chunk_size = 1 << chunk_size_log;
+    let chunk_count = frame_count.div_ceil(chunk_size);
+    let mut frame_ranges = Vec::with_capacity(chunk_count);
+    for _ in 0..chunk_count {
+        frame_ranges.push(memory::alloc_frames(chunk_size));
+    }
+    frame_ranges
+}
+
+fn vpms_from_frames(frame_ranges: &[PhysFrameRange]) -> Vec<VirtualPhysicalMapping> {
+    let mut vpms = Vec::with_capacity(frame_ranges.len());
+    for frame_range in frame_ranges {
+        let start_addr = frame_range.start.start_address();
+        assert!(frame_range.len().is_power_of_two(), "The amount of pages in the VPM has to be a power of 2");
+        let size_log = frame_range.len().trailing_zeros() as usize;
+        // TODO if the start_addr does not align with the CHUNK_SIZE find the maximal alignment and split the chunk by that.
+        assert!(start_addr.as_u64().trailing_zeros() >= (size_log as u32 + PAGE_SHIFT as u32), "physical frame should be aligned to the chunk size");
+        let mut vpm = VirtualPhysicalMapping::default();
+        vpm.physical_address.set(start_addr.as_u64() | size_log as u64);
+        vpms.push(vpm)
+    }
+    vpms
+}
+
 impl Drop for MappedFirmwareArea {
     fn drop(&mut self) {
-        if self.icm_aux_area.is_some() || self.memory.is_some() {
+        if self.icm_aux_area.is_some() {
             panic!("please unmap instead of dropping");
+        }
+        while let Some(frame_range) = self.frame_ranges.pop() {
+            memory::free_frames(frame_range);
         }
     }
 }

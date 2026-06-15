@@ -9,8 +9,9 @@ use modular_bitfield_msb::{
 };
 use rdma::ibv_access_flags;
 use x86_64::{PhysAddr, VirtAddr};
+use x86_64::structures::paging::frame::PhysFrameRange;
 use zerocopy::{AsBytes, BigEndian, FromBytes, U64};
-
+use crate::memory;
 use super::{
     cmd::{CommandInterface, Opcode},
     fw::{Capabilities, VirtualPhysicalMapping},
@@ -37,13 +38,13 @@ enum CmptType {
 ///
 /// Instead of dropping, please unmap the area from the card.
 pub(super) struct MappedIcmAuxiliaryArea {
-    memory: Option<utils::PageToFrameMapping>,
+    frame_ranges: Vec<PhysFrameRange>,
 }
 
 impl MappedIcmAuxiliaryArea {
-    pub(super) fn new(pages: MappedPages, physical: PhysAddr) -> Self {
+    pub(super) fn new(frame_ranges: Vec<PhysFrameRange>) -> Self {
         Self {
-            memory: Some((pages, physical)),
+            frame_ranges
         }
     }
 
@@ -53,7 +54,9 @@ impl MappedIcmAuxiliaryArea {
         let _: () = cmd.execute_command(Opcode::UnmapIcmAux, (), (), 0)?;
         trace!("successfully unmapped ICM auxiliary area");
         // actually free the memory
-        self.memory.take().unwrap();
+        while let Some(frame_range) = self.frame_ranges.pop() {
+            memory::free_frames(frame_range);
+        }
         Ok(())
     }
 
@@ -237,7 +240,7 @@ impl MappedIcmAuxiliaryArea {
 
 impl Drop for MappedIcmAuxiliaryArea {
     fn drop(&mut self) {
-        if self.memory.is_some() {
+        if !self.frame_ranges.is_empty() {
             panic!("please unmap instead of dropping")
         }
     }

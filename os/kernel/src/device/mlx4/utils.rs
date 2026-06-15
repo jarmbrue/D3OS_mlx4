@@ -3,13 +3,12 @@ use x86_64::structures::paging::frame::PhysFrameRange;
 use x86_64::structures::paging::page::{Page, PageRange};
 use x86_64::structures::paging::{PageTableFlags, PhysFrame, Size4KiB};
 
-use crate::memory::{MemorySpace, PAGE_SIZE};
-use crate::process_manager;
+use crate::memory::PAGE_SIZE;
+use crate::{memory, process_manager};
 use x86_64::{PhysAddr, VirtAddr};
 
 use core::mem;
 
-use crate::memory::vma::VmaType;
 use alloc::boxed::Box;
 use alloc::slice;
 use alloc::vec::Vec;
@@ -282,9 +281,6 @@ impl<'a> Operations<'a> {
     }
 }
 
-const DMA_FLAGS: PageTableFlags =
-    PageTableFlags::from_bits_truncate(PageTableFlags::NO_EXECUTE.bits() | PageTableFlags::PRESENT.bits() | PageTableFlags::WRITABLE.bits());
-
 pub fn mapped_pages_from_frames(frame_range: PhysFrameRange) -> PageRange<Size4KiB> {
     let v1 = VirtAddr::new(frame_range.start.start_address().as_u64());
     let v2 = VirtAddr::new(frame_range.end.start_address().as_u64());
@@ -334,7 +330,7 @@ pub fn set_dma_flags(page_range: PageRange<Size4KiB>) {
         .write()
         .current_process()
         .virtual_address_space
-        .set_flags(page_range, DMA_FLAGS);
+        .set_flags(page_range, PageTableFlags::NO_EXECUTE | PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
 }
 
 pub fn set_mmio_flags(frame_range: PhysFrameRange<Size4KiB>) {
@@ -362,9 +358,7 @@ pub fn pci_map_bar_mem(mlx3_pci_dev: &EndpointHeader, slot: u8, config_access: &
 }
 
 pub fn create_cont_mapping_with_dma_flags(frame_count: usize) -> Result<PageToFrameRange, &'static str> {
-    let process = process_manager().read().current_process();
-    let vma = process.virtual_address_space.alloc_vma(None, frame_count as u64, MemorySpace::User, VmaType::Anonymous, "mlx4_cont").unwrap();
-    let memory = process.virtual_address_space.alloc2_pf_for_vma(&vma).expect("Memory can't be allocated, since the frame allocator didn't return frames");
+    let memory = memory::alloc_frames(frame_count);
     let page_range = mapped_pages_from_frames(memory);
     set_dma_flags(page_range);
 
