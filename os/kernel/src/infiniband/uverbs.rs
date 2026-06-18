@@ -52,7 +52,7 @@ pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
 
             unsafe { copy_nonoverlapping(__kernel_buf.as_ptr().cast(), __user_buf, query_h * size_of::<usize>()) };
 
-            Ok(0)
+            Ok(query_h)
         }
         UVERBS_CMD_QUERY_DEVICE => {
             let __user_buf = arg as *mut ibv_device_attr_container;

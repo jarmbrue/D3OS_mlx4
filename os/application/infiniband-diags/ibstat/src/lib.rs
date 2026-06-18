@@ -6,6 +6,7 @@ use runtime::*;
 
 pub fn invoke() {
     let devices = devices().expect("failed to get device list");
+    println!("Found {} devices", devices.len());
 
     for dev in devices.iter() {
         let dev_name = dev.name().expect("failed to get device name");
