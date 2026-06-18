@@ -206,6 +206,7 @@ impl MappedIcmAuxiliaryArea {
         // We allocate in as big chunks as we can,
         // up to a maximum of 256 KB per chunk.
         const TABLE_CHUNK_SIZE: usize = 1 << 18;
+        trace!("Creating icm table of {} objects with size {} at {:016x}, reserved = {}", obj_num, obj_size, virt, reserved);
 
         let table_size = obj_size as usize * obj_num;
         let obj_per_chunk = TABLE_CHUNK_SIZE / obj_size as usize;
@@ -562,6 +563,7 @@ impl MappedIcm {
     /// Allocate and map an ICM.
     // TODO: merge this with Firmware::map_area and MappedFirmwareArea::map_icm_aux?
     fn new(cmd: &mut CommandInterface, chunk_size: usize, num_pages: u32, card_virtual: u64) -> Result<Self, &'static str> {
+        trace!("create icm mapping chunk_size = {}, num_pages = {}, card_virtual = 0x{:016x}", chunk_size, num_pages, card_virtual);
         let (pages, physical) = utils::create_cont_mapping_with_dma_flags(utils::pages_required(chunk_size))?.fetch_in_addr()?;
         let mut align = physical.as_u64().trailing_zeros();
         if align > PAGE_SIZE.ilog2() {
