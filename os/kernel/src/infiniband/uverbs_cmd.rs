@@ -1,15 +1,17 @@
 use alloc::vec::Vec;
 use rdma::uverbs_uapi::{ibv_cq_container, ibv_mr_res, ibv_qp_container, ibv_qp_modify_container, ibv_qp_post_recv_container, ibv_qp_post_send_container};
-use rdma::{ibv_access_flags, ibv_device_attr, ibv_port_attr, ibv_wc};
+use rdma::{ibv_access_flags, ibv_device, ibv_device_attr, ibv_port_attr, ibv_wc};
 use spin::{MutexGuard};
 
 use crate::device::mlx4::{devices_supported, get_dev_list, minor_to_idx, ConnectX3Nic};
 
-pub fn uverbs_query_devices(dev_store: &mut [usize]) -> usize {
+pub fn uverbs_query_devices(dev_store: &mut [ibv_device]) -> usize {
     let len = dev_store.len().min(devices_supported());
     let mut query_hit = 0;
     for dev in get_dev_list().lock().iter().take(len) {
-        dev_store[query_hit] = dev.minor;
+        dev_store[query_hit] = ibv_device {
+            nic: dev.minor,
+        };
         query_hit += 1;
     }
 

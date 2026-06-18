@@ -128,17 +128,6 @@ impl TypeSize for ibv_qp_post_recv_container {
     const S: usize = size_of::<ibv_recv_wr>();
 }
 
-// global table to define a pl. interface
-static UVERBS_PER_CMD_SIZE_TABLE: &[(UverbsCmdEnc, UverbsCmdSupportedSize)] = &[
-    (UVERBS_CMD_QUERY_DEVICES, UVERBS_MAX_QUERY_DEVICES_REQ * size_of::<usize>())
-];
-
-pub fn uverbs_per_cmd_size(cmd_enc: UverbsCmdEnc) -> usize {
-    UVERBS_PER_CMD_SIZE_TABLE.iter()
-        .find(|x| x.0 == cmd_enc)
-        .map(|x| x.1).unwrap_or(0)
-    }
-
 #[repr(C)]
 pub struct ibv_device_attr_container {
     pub fw_ver: [u8; ibv_device_attr::S],

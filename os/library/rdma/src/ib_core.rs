@@ -45,6 +45,10 @@ bitflags! {
     }
 }
 
+pub struct ibv_device {
+    pub nic: usize,
+}
+
 pub struct ibv_device_attr {
     pub fw_ver: String,
     pub phys_port_cnt: u8,

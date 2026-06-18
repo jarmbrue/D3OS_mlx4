@@ -14,9 +14,9 @@ pub use rdma::{
     ibv_recv_wr, ibv_send_wr, ibv_send_wr_wr, ibv_send_flags, ibv_sge,
     ibv_wr_opcode, ibv_wc, ibv_wc_opcode, ibv_wc_status,
 };
-
+pub(crate) use rdma::ibv_device;
 use syscall::{syscall, SystemCall::Uverb};
-use rdma::uverbs_uapi::{TypeSize, UVERBS_CMD_CREATE_CQ, UVERBS_CMD_CREATE_QP, UVERBS_CMD_DEREGISTER_MR, UVERBS_CMD_DESTROY_CQ, UVERBS_CMD_DESTROY_QP, UVERBS_CMD_MODIFY_QP, UVERBS_CMD_POLL_CQ, UVERBS_CMD_POST_SEND, UVERBS_CMD_QUERY_DEVICE, UVERBS_CMD_QUERY_DEVICES, UVERBS_CMD_QUERY_PORT, UVERBS_CMD_REGISTER_MR, ibv_cq_container, ibv_cq_poll_container, ibv_device_attr_container, ibv_mr_container, ibv_mr_res, ibv_port_attr_container, ibv_qp_container, ibv_qp_modify_container, ibv_qp_post_recv_container, ibv_qp_post_send_container, uverbs_per_cmd_size};
+use rdma::uverbs_uapi::{TypeSize, UVERBS_CMD_CREATE_CQ, UVERBS_CMD_CREATE_QP, UVERBS_CMD_DEREGISTER_MR, UVERBS_CMD_DESTROY_CQ, UVERBS_CMD_DESTROY_QP, UVERBS_CMD_MODIFY_QP, UVERBS_CMD_POLL_CQ, UVERBS_CMD_POST_SEND, UVERBS_CMD_QUERY_DEVICE, UVERBS_CMD_QUERY_DEVICES, UVERBS_CMD_QUERY_PORT, UVERBS_CMD_REGISTER_MR, ibv_cq_container, ibv_cq_poll_container, ibv_device_attr_container, ibv_mr_container, ibv_mr_res, ibv_port_attr_container, ibv_qp_container, ibv_qp_modify_container, ibv_qp_post_recv_container, ibv_qp_post_send_container, UVERBS_MAX_QUERY_DEVICES_REQ};
 
 pub struct ibv_context_ops {
     pub poll_cq: Option<fn(
@@ -39,10 +39,6 @@ const IBV_CONTEXT_OPS: ibv_context_ops = ibv_context_ops {
     post_send: Some(ibv_post_send),
     post_recv: Some(ibv_post_recv),
 };
-
-pub struct ibv_device {
-    nic: usize,
-}
 
 pub struct ibv_context {
     pub ops: ibv_context_ops,
@@ -137,26 +133,19 @@ pub struct ibv_qp_init_attr<'cq, 'ctx> {
 ///
 /// Return a array of IB devices.
 pub fn ibv_get_device_list() -> Result<Vec<ibv_device>> {
-    let cmd_s = uverbs_per_cmd_size(UVERBS_CMD_QUERY_DEVICES) / size_of::<usize>();
-    let mut devices_fd = vec![0usize, cmd_s];
-
-    let mut devices : Vec<ibv_device> = Vec::new();
-
-    let buf_addr = devices_fd.as_mut_ptr().addr();
-
-    if let Ok(device_c) = syscall(Uverb, &[0, UVERBS_CMD_QUERY_DEVICES, buf_addr]) {
-        for i in 0..device_c {
-            devices.push(ibv_device { nic: devices_fd[i] });
-        }
-    }
-
-    Ok(devices)
+    let mut devices : Vec<ibv_device> = Vec::with_capacity(UVERBS_MAX_QUERY_DEVICES_REQ);
+    syscall(Uverb, &[0, UVERBS_CMD_QUERY_DEVICES, devices.as_mut_ptr() as usize])
+        .map(|count| {
+            unsafe { devices.set_len(count) };
+            devices
+        })
+        .map_err(|_| todo!())
 }
 
 /// Return kernel device name
 pub fn ibv_get_device_name(_device: &ibv_device) -> Option<String> {
     // TODO: don't hardcode this
-    Some("mlx3_0".to_string())
+    Some("mlx4_todo".to_string())
 }
 
 /// Return kernel device index
@@ -164,8 +153,9 @@ pub fn ibv_get_device_name(_device: &ibv_device) -> Option<String> {
 /// Available for the kernel with support of IB device query
 /// over netlink interface. For the unsupported kernels, the
 /// relevant error will be returned.
-pub fn ibv_get_device_index(_device: &ibv_device) -> Result<i32> {
-    Err(Error::from(ErrorKind::InvalidData))
+pub fn ibv_get_device_index(device: &ibv_device) -> Result<i32> {
+    device.nic.try_into()
+        .map_err(|x| Error::from(ErrorKind::InvalidData))
 }
 
 /// Return device's node GUID
