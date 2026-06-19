@@ -40,7 +40,7 @@ use core::ffi::c_void;
 use core::mem::size_of;
 use core::ops::Deref;
 use core::ptr;
-use log::{trace, debug, info, warn, LevelFilter};
+use log::{trace, debug, info, warn, LevelFilter, Log};
 use multiboot2::{BootInformation, BootInformationHeader, EFIMemoryMapTag, MemoryAreaType, MemoryMapTag, TagHeader};
 use uefi::data_types::Handle;
 use uefi::mem::memory_map::MemoryMap;
@@ -76,7 +76,7 @@ const BOOT_TO_GUI: bool = false; // Immediately start the GUI instead of termina
 pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInformationHeader) {
     // Initialize logger
     log::set_logger(logger())
-        .map(|()| log::set_max_level(LevelFilter::Info))
+        .map(|()| log::set_max_level(LevelFilter::Trace))
         .expect("Failed to initialize logger!");
 
     // Log messages and panics are now working, but cannot use format string until the heap is initialized later on
