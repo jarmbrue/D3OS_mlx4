@@ -392,6 +392,64 @@ impl VirtualAddressSpace {
         vmas.insert(start_address, Arc::new(v_area));
     }
 
+    fn access_ok(&self, addr: VirtAddr, len: usize) -> bool {
+        if len == 0 {
+            return false;
+        }
+        let start = addr.as_u64();
+        if let Some(end) = addr.as_u64().checked_add(len as u64 - 1) {
+            self.first_usable_user_addr.as_u64() <= start && end <= self.last_usable_user_addr.as_u64()
+        } else {
+            false
+        }
+    }
+
+    fn ensure_user_page_is_mapped(&self, page: Page) -> bool {
+        if self.page_tables.translate(page.start_address()).is_some() {
+            return true;
+        }
+
+        // TODO: Map
+        warn!("trying to access a page that is not mapped");
+        false
+    }
+
+    pub fn copy_to_user<T: Copy>(&self, dst: VirtAddr, src: &[T]) -> Result<(), ()> {
+        let size = src.len() * size_of::<T>();
+        if !self.access_ok(dst, size) {
+            return Err(());
+        }
+
+        let first_page = Page::containing_address(dst);
+        let last_page = Page::containing_address(dst + size as u64);
+        for page in first_page..last_page {
+            if !self.ensure_user_page_is_mapped(page) {
+                return Err(());
+            }
+        }
+
+        unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len()) };
+        Ok(())
+    }
+
+    pub fn copy_from_user<T: Copy>(&self, dst: &mut [T], src: VirtAddr) -> Result<(), ()> {
+        let size = dst.len() * size_of::<T>();
+        if !self.access_ok(src, size) {
+            return Err(());
+        }
+
+        let first_page = Page::containing_address(src);
+        let last_page = Page::containing_address(src + size as u64);
+        for page in first_page..last_page {
+            if !self.ensure_user_page_is_mapped(page) {
+                return Err(());
+            }
+        }
+
+        unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), dst.len()) };
+        Ok(())
+    }
+
     /// Set page table `flags` for the give page range `pages`
     pub fn set_flags(&self, pages: PageRange, flags: PageTableFlags) {
         self.page_tables.set_flags(pages, flags);

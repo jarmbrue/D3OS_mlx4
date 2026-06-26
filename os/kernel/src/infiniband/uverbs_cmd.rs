@@ -1,19 +1,14 @@
+use alloc::vec::Vec;
 use rdma::uverbs_uapi::{ibv_cq_container, ibv_mr_res, ibv_qp_container, ibv_qp_modify_container, ibv_qp_post_recv_container, ibv_qp_post_send_container};
 use rdma::{ibv_access_flags, ibv_device, ibv_device_attr, ibv_port_attr, ibv_wc};
 
-use crate::device::mlx4::{devices_supported, get_dev_list, minor_to_idx, ConnectX3Nic};
+use crate::device::mlx4::{get_dev_list, minor_to_idx, ConnectX3Nic};
 
-pub fn uverbs_query_devices(dev_store: &mut [ibv_device]) -> usize {
-    let len = dev_store.len().min(devices_supported());
-    let mut query_hit = 0;
-    for dev in get_dev_list().lock().iter().take(len) {
-        dev_store[query_hit] = ibv_device {
-            nic: dev.minor,
-        };
-        query_hit += 1;
-    }
-
-    query_hit
+pub fn uverbs_query_devices(max_len: usize) -> Vec<ibv_device> {
+    get_dev_list().lock().iter()
+        .map(|dev| ibv_device { nic: dev.minor } )
+        .take(max_len)
+        .collect()
 }
 
 pub fn uverbs_query_device(minor: usize) -> Result<ibv_device_attr, &'static str> {
@@ -55,7 +50,7 @@ pub fn uverbs_create_qp<'qp>(minor: usize, qp_container: &'qp mut ibv_qp_contain
     Ok(&qp_container.qp_num)
 }
 
-pub fn uverbs_modify_qp(minor: usize, qp_modify_container: &ibv_qp_modify_container) -> Result<(), &'static str> {
+pub fn uverbs_modify_qp(minor: usize, qp_modify_container: ibv_qp_modify_container) -> Result<(), &'static str> {
     get_dev_list().lock()
         .get_mut(minor_to_idx(minor)).unwrap()
         .modify_qp(

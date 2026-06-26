@@ -45,6 +45,7 @@ bitflags! {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct ibv_device {
     pub nic: usize,
 }

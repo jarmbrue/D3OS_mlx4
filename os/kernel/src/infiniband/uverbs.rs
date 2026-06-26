@@ -1,17 +1,19 @@
 use super::uverbs_cmd::*;
 use crate::device::mlx4::{device_in_range, ConnectX3Nic};
+use crate::process_manager;
 use alloc::vec;
-use core::{mem::offset_of, slice::from_raw_parts_mut};
 use core::ptr::copy_nonoverlapping;
-use rdma::{ibv_device, ibv_device_attr, ibv_port_attr, ibv_qp_attr, ibv_qp_cap, ibv_recv_wr, ibv_send_wr, ibv_wc, uverbs_uapi::{
+use core::{mem::offset_of, slice::from_raw_parts_mut};
+use rdma::uverbs_uapi::UVERBS_MAX_QUERY_DEVICES_REQ;
+use rdma::{ibv_device_attr, ibv_port_attr, ibv_qp_attr, ibv_qp_cap, ibv_recv_wr, ibv_send_wr, ibv_wc, uverbs_uapi::{
     ibv_cq_container, ibv_cq_poll_container, ibv_device_attr_container, ibv_mr_container, ibv_mr_res, ibv_port_attr_container, ibv_qp_container,
     ibv_qp_modify_container, ibv_qp_post_recv_container, ibv_qp_post_send_container, TypeSize, UverbsCmd, UVERBS_CMD_CREATE_CQ,
     UVERBS_CMD_CREATE_QP, UVERBS_CMD_DEREGISTER_MR, UVERBS_CMD_DESTROY_CQ, UVERBS_CMD_DESTROY_QP, UVERBS_CMD_MODIFY_QP, UVERBS_CMD_POLL_CQ,
     UVERBS_CMD_POST_RECV, UVERBS_CMD_POST_SEND, UVERBS_CMD_QUERY_DEVICE, UVERBS_CMD_QUERY_DEVICES, UVERBS_CMD_QUERY_PORT, UVERBS_CMD_REGISTER_MR,
     UVERBS_MAGIC, UVERBS_MINOR_NOT_PRESENT, UVERBS_MINOR_PRESENT,
 }};
-use rdma::uverbs_uapi::UVERBS_MAX_QUERY_DEVICES_REQ;
 use syscall::return_vals::{Errno, SyscallResult};
+use x86_64::VirtAddr;
 
 static UVERBS_SUPPORTED_MINOR_TABLE: &[usize] = &[
     UVERBS_CMD_QUERY_DEVICE,
@@ -31,6 +33,8 @@ static UVERBS_SUPPORTED_MINOR_TABLE: &[usize] = &[
 pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
     let UverbsCmd::Call(_, _, size, magic, has_minor) = UverbsCmd::decode(cmd as u64);
 
+    let process = process_manager().read().current_process();
+
     if magic != UVERBS_MAGIC {
         return Err(Errno::EINVAL);
     }
@@ -44,9 +48,10 @@ pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
     match cmd {
         UVERBS_CMD_QUERY_DEVICES => {
             // TODO pass buf_size a argument?
-            // TODO check that the page for buffer is mapped;
-            let mut user_buf = unsafe { from_raw_parts_mut(arg as *mut ibv_device, UVERBS_MAX_QUERY_DEVICES_REQ) };
-            Ok(uverbs_query_devices(&mut user_buf))
+            let devices = uverbs_query_devices(UVERBS_MAX_QUERY_DEVICES_REQ);
+            process.virtual_address_space.copy_to_user(VirtAddr::new(arg as u64), &devices)
+                .map(|_| devices.len())
+                .map_err(|_| Errno::EUNKN)
         }
         UVERBS_CMD_QUERY_DEVICE => {
             let __user_buf = arg as *mut ibv_device_attr_container;
