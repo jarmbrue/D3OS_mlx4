@@ -11,6 +11,7 @@ use crate::device::mlx4::utils::FillOperation;
 use crate::memory::PAGE_SIZE;
 use alloc::boxed::Box;
 use alloc::{vec, vec::Vec};
+use alloc::string::ToString;
 use bitflags::bitflags;
 use byteorder::BigEndian;
 use log::trace;
@@ -149,6 +150,7 @@ impl QueuePair {
         // create the context
         let mut context = QueuePairContext::new();
         let mut param_mask = OptionalParameterMask::empty();
+
         // get the right state transition
         let opcode = match (self.state, attr_mask.contains(ibv_qp_attr_mask::IBV_QP_STATE), attr.qp_state) {
             // initialize
@@ -233,6 +235,7 @@ impl QueuePair {
                 }
                 Opcode::Rst2InitQp
             }
+
             // or just stay in the current state
             // We can't even set anything here.
             (ibv_qp_state::IBV_QPS_RESET, false, _) => Opcode::Any2RstQp,
@@ -243,28 +246,34 @@ impl QueuePair {
                 if attr_mask.contains(ibv_qp_attr_mask::IBV_QP_PORT) {
                     self.port_number = Some(attr.port_num);
                 }
+
                 // set required fields
                 // TODO: this might have been set in an earlier call
                 if attr_mask.contains(ibv_qp_attr_mask::IBV_QP_PATH_MTU) {
                     context.set_mtu(attr.path_mtu as u8);
                 } else {
                     // default to the highest one
-                    context.set_mtu(ibv_mtu::Mtu4096 as u8);
+                    context.set_mtu(ibv_mtu::default() as u8);
                 }
                 context.set_msg_max(caps.log_max_msg());
-                // RC and UC need remote_qpn
+
+                // TODO: required parameters for RC and UC: next_recv_psn, qos_vport, roce_mode,
                 if self.qp_type == ibv_qp_type::IBV_QPT_RC || self.qp_type == ibv_qp_type::IBV_QPT_UC {
                     // TODO: this might have been set in an earlier call
                     assert!(attr_mask.contains(ibv_qp_attr_mask::IBV_QP_DEST_QPN));
                     context.set_remote_qpn(attr.dest_qp_num);
-                }
-                // TODO: rra_max, ric, next_recv_psn, qos_vport, roce_mode,
-                // TODO: rate_limit_index
-                assert!(attr_mask.contains(ibv_qp_attr_mask::IBV_QP_AV));
-                // RC and RC need rlid
-                if self.qp_type == ibv_qp_type::IBV_QPT_RC || self.qp_type == ibv_qp_type::IBV_QPT_UC {
+                    assert!(attr_mask.contains(ibv_qp_attr_mask::IBV_QP_AV));
                     context.set_primary_rlid(attr.ah_attr.dlid);
                 }
+
+                // TODO: required parameters for RC: ric
+                if self.qp_type == ibv_qp_type::IBV_QPT_RC {
+                    assert!(attr_mask.contains(ibv_qp_attr_mask::IBV_QP_MAX_DEST_RD_ATOMIC));
+                    // TODO: check if the devices supports that many outstanding read/atomic operations
+                    context.set_rra_max_checked(attr.max_dest_rd_atomic.next_power_of_two().ilog2() as u8).map_err(|err| "rra_max out of bounds")?;
+                }
+
+                // TODO: required parameters for all types: rate_limit_index
                 context.set_primary_grh(false);
                 context.set_primary_mlid(0); // might be slid
                 context.set_primary_sched_queue(
@@ -272,6 +281,7 @@ impl QueuePair {
                 );
                 // TODO: mgid_index, ud_force_mgid, max_stat_rate, hop_limit,
                 // TODO: tclass, flow_label, rgid, link_type, if_counter_index
+
                 // set the optional parameters
                 // TODO: vsd
                 if self.qp_type == ibv_qp_type::IBV_QPT_RC {
@@ -312,6 +322,7 @@ impl QueuePair {
                 }
                 Opcode::Init2RtrQp
             }
+
             // or just stay in the current state
             (ibv_qp_state::IBV_QPS_INIT, true, ibv_qp_state::IBV_QPS_INIT) | (ibv_qp_state::IBV_QPS_INIT, false, _) => {
                 // can update qkey for UD
@@ -340,8 +351,11 @@ impl QueuePair {
             // rtr -> rts
             (ibv_qp_state::IBV_QPS_RTR, true, ibv_qp_state::IBV_QPS_RTS) => {
                 // set required fields
-                // TODO: ack_req_freq, sra_max, next_send_psn, retry_count
+                // TODO: ack_req_freq, next_send_psn, retry_count
                 if self.qp_type == ibv_qp_type::IBV_QPT_RC {
+                    assert!(attr_mask.contains(ibv_qp_attr_mask::IBV_QP_MAX_QP_RD_ATOMIC));
+                    // TODO: check if the devices supports that many outstanding read/atomic operations
+                    context.set_sra_max_checked(attr.max_rd_atomic.next_power_of_two().ilog2() as u8).map_err(|err| "sra_max out of bounds")?;
                     assert!(attr_mask.contains(ibv_qp_attr_mask::IBV_QP_RNR_RETRY));
                     context.set_rnr_retry(attr.rnr_retry);
                     assert!(attr_mask.contains(ibv_qp_attr_mask::IBV_QP_TIMEOUT));
@@ -1184,7 +1198,11 @@ struct QueuePairContext {
     #[skip(getters)]
     alternate_dmac: B48,
     #[skip]
-    __: u16,
+    __: u8,
+    #[skip(getters)]
+    sra_max: B3,
+    #[skip]
+    __: B5,
     #[skip(getters)]
     rnr_retry: B3,
     #[skip]
@@ -1206,7 +1224,11 @@ struct QueuePairContext {
     #[skip(getters)]
     ssn: B24,
     #[skip]
-    __: u16,
+    __: u8,
+    #[skip(getters)]
+    rra_max: B3,
+    #[skip]
+    __: B5,
     #[skip(getters)]
     remote_read: bool,
     #[skip(getters)]

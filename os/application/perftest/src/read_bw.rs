@@ -111,7 +111,7 @@ fn run_server(
     my_info.write_to(&mut stream).unwrap();
 
     // Connect the QP to the client.
-    let mut _qp = prepared.handshake(endpoint_from_peer(&client_info))?;
+    let mut _qp = prepared.handshake(endpoint_from_peer(&client_info)).unwrap();
     println!("QP connected – waiting for client to finish the test ...");
 
     // Wait for client's end-of-test signal.
