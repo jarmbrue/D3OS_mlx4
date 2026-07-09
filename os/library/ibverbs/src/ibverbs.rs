@@ -76,7 +76,6 @@ use core::ops::Range;
 use core::ptr;
 use mm::MmapFlags;
 use mm::mmap;
-use rdma::{ibv_port_attr, ibv_recv_wr, ibv_send_wr, ibv_send_flags, ibv_qp_cap };
 
 use ibverbs_sys as ffi;
 
@@ -89,11 +88,9 @@ const PORT_NUM: u8 = 1;
 pub use ffi::ibv_mtu;
 pub use ffi::ibv_qp_type;
 pub use ffi::ibv_wc;
-pub use ffi::ibv_wc_opcode;
-pub use ffi::ibv_wc_status;
 
 #[cfg(feature = "serialize")]
-use bincode::{Encode, Decode};
+use bincode::{Decode, Encode};
 
 /// Access flags for use with `QueuePair` and `MemoryRegion`.
 pub use ffi::ibv_access_flags;
@@ -401,7 +398,7 @@ impl Context {
         Ok(ProtectionDomain { ctx: self, pd })
     }
 
-    pub fn query_port<'ctx>(&'ctx self) -> &'ctx ibv_port_attr{
+    pub fn query_port<'ctx>(&'ctx self) -> &'ctx ffi::ibv_port_attr{
         &self.port_attr
     }
 
@@ -477,7 +474,7 @@ pub struct QueuePairBuilder<'res> {
     send: &'res CompletionQueue<'res>,
     recv: &'res CompletionQueue<'res>,
 
-    cap: ibv_qp_cap,
+    cap: ffi::ibv_qp_cap,
 
     qp_type: ffi::ibv_qp_type::Type,
 
@@ -520,7 +517,7 @@ impl<'res> QueuePairBuilder<'res> {
         send: &'scq CompletionQueue<'ctx>,
         recv: &'rcq CompletionQueue<'ctx>,
         qp_type: ffi::ibv_qp_type::Type,
-        cap: ibv_qp_cap
+        cap: ffi::ibv_qp_cap
     ) -> QueuePairBuilder<'res>
     where
         'scq: 'res,
@@ -1107,6 +1104,7 @@ unsafe impl<'pd, T> Send for LocalMemoryRegion<'pd, T> {}
 unsafe impl<'pd, T> Sync for LocalMemoryRegion<'pd, T> {}
 
 use core::ops::{Deref, DerefMut};
+
 impl<'pd, T> Deref for LocalMemoryRegion<'pd, T> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
@@ -1176,7 +1174,7 @@ impl<'ctx> ProtectionDomain<'ctx> {
         send: &'scq CompletionQueue<'ctx>,
         recv: &'rcq CompletionQueue<'ctx>,
         qp_type: ffi::ibv_qp_type::Type,
-        cap: ibv_qp_cap
+        cap: ffi::ibv_qp_cap
     ) -> QueuePairBuilder<'res>
     where
         'scq: 'res,
@@ -1319,7 +1317,7 @@ impl<'res> QueuePair<'res> {
         mr: &mut LocalMemoryRegion<'pd, T>,
         mut ranges: Vec<Vec<R>>,
         mut wr_ids: Vec<u64>,
-        mut send_flags: Vec<ibv_send_flags>
+        mut send_flags: Vec<ffi::ibv_send_flags>
     ) -> io::Result<()>
     where
         R: sliceindex::SliceIndex<[T], Output = [T]>,
@@ -1328,7 +1326,7 @@ impl<'res> QueuePair<'res> {
             ranges.len() == wr_ids.len(),
             "local ranges, and wr ids must have the same size!");
 
-        let mut next: *mut ibv_send_wr = ptr::null_mut();
+        let mut next: *mut ffi::ibv_send_wr = ptr::null_mut();
         wr_ids.reverse();
 
         for wr_id in wr_ids {
@@ -1426,7 +1424,7 @@ impl<'res> QueuePair<'res> {
             ranges.len() == wr_ids.len(),
             "local ranges, and wr ids must have the same size!");
 
-        let mut next: *mut ibv_recv_wr = ptr::null_mut();
+        let mut next: *mut ffi::ibv_recv_wr = ptr::null_mut();
         wr_ids.reverse();
 
         for wr_id in wr_ids {
@@ -1469,7 +1467,7 @@ impl<'res> QueuePair<'res> {
         // means that in all cases, the actual data of the incoming message will start at an offset
         // of 40 bytes into the buffer(s) in the scatter list.
 
-        let _bad_wr = unsafe { self.qp.ops.post_recv.as_ref().unwrap()(&mut self.qp, wr)? };
+        let _bad_wr = self.qp.ops.post_recv.as_ref().unwrap()(&mut self.qp, wr)?;
         Ok(())
     }
 
@@ -1511,7 +1509,7 @@ impl<'res> QueuePair<'res> {
         remote_mr: &mut RemoteMemoryRegion<T>,
         remote_ranges: Vec<Range<u64>>,
         wr_ids: Vec<u64>,
-        send_flags: Vec<ibv_send_flags>
+        send_flags: Vec<ffi::ibv_send_flags>
     ) -> io::Result<()>
     where
         R: sliceindex::SliceIndex<[T], Output = [T]>,
@@ -1564,7 +1562,7 @@ impl<'res> QueuePair<'res> {
         local_mr: &mut LocalMemoryRegion<'pd, T>,
         local_ranges: Vec<Vec<R>>,
         wr_ids: Vec<u64>,
-        send_flags: Vec<ibv_send_flags>
+        send_flags: Vec<ffi::ibv_send_flags>
     ) -> io::Result<()>
     where
         R: sliceindex::SliceIndex<[T], Output = [T]>,
@@ -1588,7 +1586,7 @@ impl<'res> QueuePair<'res> {
         mut local_ranges: Vec<Vec<R>>,
         mut wr_ids: Vec<u64>,
         opcode: ffi::ibv_wr_opcode,
-        mut send_flags: Vec<ibv_send_flags>
+        mut send_flags: Vec<ffi::ibv_send_flags>
     ) -> io::Result<()>
     where
         R: sliceindex::SliceIndex<[T], Output = [T]>,
@@ -1598,7 +1596,7 @@ impl<'res> QueuePair<'res> {
             && (wr_ids.len() == send_flags.len()),
             "remote ranges, local ranges, and wr ids must have the same size!");
 
-        let mut next: *mut ibv_send_wr = ptr::null_mut();
+        let mut next: *mut ffi::ibv_send_wr = ptr::null_mut();
         wr_ids.reverse();
 
         for wr_id in wr_ids {
