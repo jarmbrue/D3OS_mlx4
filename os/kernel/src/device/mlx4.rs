@@ -195,7 +195,9 @@ impl ConnectX3Nic {
     /// This is used by ibv_query_device.
     pub fn query_device(&mut self) -> Result<ibv_device_attr, &'static str> {
         Ok(ibv_device_attr {
-            fw_ver: self.firmware.version(),
+            fw_ver_major: self.firmware.major.get(),
+            fw_ver_minor: self.firmware.minor.get(),
+            fw_ver_subminor: self.firmware.sub_minor.get(),
             phys_port_cnt: self.ports.len().try_into().unwrap(),
         })
     }

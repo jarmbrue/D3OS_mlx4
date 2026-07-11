@@ -4,7 +4,7 @@
 
 extern crate alloc;
 
-use alloc::{string::String, vec::Vec};
+use alloc::vec::Vec;
 use bitflags::bitflags;
 use strum_macros::FromRepr;
 
@@ -50,8 +50,11 @@ pub struct ibv_device {
     pub nic: usize,
 }
 
+#[derive(Default, Clone, Copy)]
 pub struct ibv_device_attr {
-    pub fw_ver: String,
+    pub fw_ver_major: u16,
+    pub fw_ver_minor: u16,
+    pub fw_ver_subminor: u16,
     pub phys_port_cnt: u8,
 }
 

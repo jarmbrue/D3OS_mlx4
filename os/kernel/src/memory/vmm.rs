@@ -414,7 +414,8 @@ impl VirtualAddressSpace {
         false
     }
 
-    pub fn copy_to_user<T: Copy>(&self, dst: VirtAddr, src: &[T]) -> Result<(), ()> {
+    pub fn copy_to_user<T: Copy>(&self, dst: *mut T, src: &[T]) -> Result<(), ()> {
+        let dst = VirtAddr::from_ptr(dst);
         let size = src.len() * size_of::<T>();
         if !self.access_ok(dst, size) {
             return Err(());
@@ -432,7 +433,8 @@ impl VirtualAddressSpace {
         Ok(())
     }
 
-    pub fn copy_from_user<T: Copy>(&self, dst: &mut [T], src: VirtAddr) -> Result<(), ()> {
+    pub fn copy_from_user<T: Copy>(&self, dst: &mut [T], src: *const T) -> Result<(), ()> {
+        let src = VirtAddr::from_ptr(src);
         let size = dst.len() * size_of::<T>();
         if !self.access_ok(src, size) {
             return Err(());

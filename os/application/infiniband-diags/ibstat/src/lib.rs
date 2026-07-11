@@ -20,7 +20,7 @@ pub fn invoke() {
             .expect("failed to query device");
 
         println!("    Number of ports: {}", device_stats.phys_port_cnt);
-        println!("    Firmware version: {}", device_stats.fw_ver);
+        println!("    Firmware version: {}.{}.{}", device_stats.fw_ver_major, device_stats.fw_ver_minor, device_stats.fw_ver_subminor);
 
         // assuming each hca to just have 1 port, which is the default for most
         let port_stats = ctx.query_port();

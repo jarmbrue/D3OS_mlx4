@@ -5,7 +5,7 @@
 
 extern crate alloc;
 
-use alloc::{boxed::Box, string::{String, ToString}, vec, vec::{Vec}};
+use alloc::{boxed::Box, string::{String, ToString}, vec::{Vec}};
 use core3::io::{Error, ErrorKind, Result as Result};
 pub use rdma::{
     __be64, ibv_access_flags, ibv_ah_attr, ibv_device_attr, ibv_gid, ibv_mtu,
@@ -16,7 +16,7 @@ pub use rdma::{
 };
 pub(crate) use rdma::ibv_device;
 use syscall::{syscall, SystemCall::Uverb};
-use rdma::uverbs_uapi::{TypeSize, UVERBS_CMD_CREATE_CQ, UVERBS_CMD_CREATE_QP, UVERBS_CMD_DEREGISTER_MR, UVERBS_CMD_DESTROY_CQ, UVERBS_CMD_DESTROY_QP, UVERBS_CMD_MODIFY_QP, UVERBS_CMD_POLL_CQ, UVERBS_CMD_POST_SEND, UVERBS_CMD_QUERY_DEVICE, UVERBS_CMD_QUERY_DEVICES, UVERBS_CMD_QUERY_PORT, UVERBS_CMD_REGISTER_MR, ibv_cq_container, ibv_cq_poll_container, ibv_device_attr_container, ibv_mr_container, ibv_mr_res, ibv_port_attr_container, ibv_qp_container, ibv_qp_modify_container, ibv_qp_post_recv_container, ibv_qp_post_send_container, UVERBS_MAX_QUERY_DEVICES_REQ};
+use rdma::uverbs_uapi::{UVERBS_CMD_CREATE_CQ, UVERBS_CMD_CREATE_QP, UVERBS_CMD_DEREGISTER_MR, UVERBS_CMD_DESTROY_CQ, UVERBS_CMD_DESTROY_QP, UVERBS_CMD_MODIFY_QP, UVERBS_CMD_POLL_CQ, UVERBS_CMD_POST_SEND, UVERBS_CMD_QUERY_DEVICE, UVERBS_CMD_QUERY_DEVICES, UVERBS_CMD_QUERY_PORT, UVERBS_CMD_REGISTER_MR, ibv_cq_container, ibv_cq_poll_container, ibv_mr_container, ibv_mr_res, ibv_port_attr_container, ibv_qp_container, ibv_qp_modify_container, ibv_qp_post_recv_container, ibv_qp_post_send_container, UVERBS_MAX_QUERY_DEVICES_REQ};
 
 pub struct ibv_context_ops {
     pub poll_cq: Option<fn(
@@ -173,25 +173,14 @@ pub fn ibv_open_device(device: &ibv_device) -> Result<ibv_context> {
 pub fn ibv_query_device(context: &ibv_context) -> Result<ibv_device_attr> {
     let dev_fd = context.lock();
 
-    let dev_attr_container = ibv_device_attr_container {
-        fw_ver: [b'0'; ibv_device_attr::S],
-        phys_port_cnt: Default::default()
-    };
+    let device_attr = ibv_device_attr::default();
 
     match syscall(Uverb, &[
         dev_fd,
         UVERBS_CMD_QUERY_DEVICE,
-        (&dev_attr_container as *const ibv_device_attr_container).addr()
+        &device_attr as *const _ as usize,
         ]) {
-        Ok(str_s) => {
-            let fw_str = String::from_utf8_lossy(&dev_attr_container.fw_ver[..str_s]).into_owned();
-            let dev_attr = ibv_device_attr {
-                fw_ver: fw_str,
-                phys_port_cnt: dev_attr_container.phys_port_cnt
-            };
-
-            Ok(dev_attr)
-        },
+        Ok(_) => Ok(device_attr),
         Err(_) => Err(Error::from(ErrorKind::Other))
     }
 }

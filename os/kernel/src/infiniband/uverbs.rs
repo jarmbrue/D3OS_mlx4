@@ -5,15 +5,14 @@ use alloc::vec;
 use core::ptr::copy_nonoverlapping;
 use core::{mem::offset_of, slice::from_raw_parts_mut};
 use rdma::uverbs_uapi::UVERBS_MAX_QUERY_DEVICES_REQ;
-use rdma::{ibv_device_attr, ibv_port_attr, ibv_qp_attr, ibv_qp_cap, ibv_recv_wr, ibv_send_wr, ibv_wc, uverbs_uapi::{
-    ibv_cq_container, ibv_cq_poll_container, ibv_device_attr_container, ibv_mr_container, ibv_mr_res, ibv_port_attr_container, ibv_qp_container,
+use rdma::{ibv_device, ibv_device_attr, ibv_port_attr, ibv_qp_attr, ibv_qp_cap, ibv_recv_wr, ibv_send_wr, ibv_wc, uverbs_uapi::{
+    ibv_cq_container, ibv_cq_poll_container, ibv_mr_container, ibv_mr_res, ibv_port_attr_container, ibv_qp_container,
     ibv_qp_modify_container, ibv_qp_post_recv_container, ibv_qp_post_send_container, TypeSize, UverbsCmd, UVERBS_CMD_CREATE_CQ,
     UVERBS_CMD_CREATE_QP, UVERBS_CMD_DEREGISTER_MR, UVERBS_CMD_DESTROY_CQ, UVERBS_CMD_DESTROY_QP, UVERBS_CMD_MODIFY_QP, UVERBS_CMD_POLL_CQ,
     UVERBS_CMD_POST_RECV, UVERBS_CMD_POST_SEND, UVERBS_CMD_QUERY_DEVICE, UVERBS_CMD_QUERY_DEVICES, UVERBS_CMD_QUERY_PORT, UVERBS_CMD_REGISTER_MR,
     UVERBS_MAGIC, UVERBS_MINOR_NOT_PRESENT, UVERBS_MINOR_PRESENT,
 }};
 use syscall::return_vals::{Errno, SyscallResult};
-use x86_64::VirtAddr;
 
 static UVERBS_SUPPORTED_MINOR_TABLE: &[usize] = &[
     UVERBS_CMD_QUERY_DEVICE,
@@ -49,28 +48,15 @@ pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
         UVERBS_CMD_QUERY_DEVICES => {
             // TODO pass buf_size a argument?
             let devices = uverbs_query_devices(UVERBS_MAX_QUERY_DEVICES_REQ);
-            process.virtual_address_space.copy_to_user(VirtAddr::new(arg as u64), &devices)
+            process.virtual_address_space.copy_to_user(arg as *mut ibv_device, &devices)
                 .map(|_| devices.len())
-                .map_err(|_| Errno::EUNKN)
+                .map_err(|_| Errno::EINVAL)
         }
         UVERBS_CMD_QUERY_DEVICE => {
-            let __user_buf = arg as *mut ibv_device_attr_container;
-
-            let __user_port_off = offset_of!(ibv_device_attr_container, phys_port_cnt);
-            let __user_fw_off = offset_of!(ibv_device_attr_container, fw_ver);
-
-            let __user_buf_fw_str = unsafe { __user_buf.cast::<u8>().add(__user_fw_off) };
-            let __user_buf_port = unsafe { __user_buf.cast::<u8>().add(__user_port_off) };
-
             let dev_attr = uverbs_query_device(minor).map_err(|_| Errno::EINVAL)?;
-
-            let size_trunc = dev_attr.fw_ver.len().min(ibv_device_attr::S);
-            let __kernel_fw_str = dev_attr.fw_ver.as_ptr();
-
-            unsafe { copy_nonoverlapping(__kernel_fw_str, __user_buf_fw_str, size_trunc) };
-            unsafe { copy_nonoverlapping(&dev_attr.phys_port_cnt as *const _, __user_buf_port, size_of::<u8>()) };
-
-            Ok(size_trunc)
+            process.virtual_address_space.copy_to_user(arg as *mut ibv_device_attr, &[dev_attr])
+                .map(|val| 0)
+                .map_err(|_| Errno::EINVAL)
         }
         UVERBS_CMD_QUERY_PORT => {
             let __user_buf = arg as *mut ibv_port_attr_container;
