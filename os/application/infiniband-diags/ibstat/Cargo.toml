@@ -6,6 +6,9 @@ authors = [ "Sandro Jose Leal Miudo" ]
 
 [lib]
 crate-type = ["staticlib"]
+test = false
+doctest = false
+bench = false
 
 [dependencies]
 # Local dependencies
