@@ -2,17 +2,17 @@ use super::uverbs_cmd::*;
 use crate::device::mlx4::{device_in_range, ConnectX3Nic};
 use crate::process_manager;
 use alloc::vec;
-use core::ptr::copy_nonoverlapping;
-use core::{mem::offset_of, slice::from_raw_parts_mut};
+use core::slice::{from_mut, from_raw_parts_mut};
 use rdma::uverbs_uapi::UVERBS_MAX_QUERY_DEVICES_REQ;
-use rdma::{ibv_device, ibv_device_attr, ibv_port_attr, ibv_qp_attr, ibv_qp_cap, ibv_recv_wr, ibv_send_wr, ibv_wc, uverbs_uapi::{
-    ibv_cq_container, ibv_cq_mmap_container, ibv_cq_poll_container, ibv_mr_container, ibv_mr_res, ibv_port_attr_container, ibv_qp_container,
+use rdma::{ibv_device, ibv_device_attr, ibv_wc, uverbs_uapi::{
+    ibv_cq_container, ibv_cq_mmap_container, ibv_cq_poll_container, ibv_mr_container, ibv_port_attr_container, ibv_qp_container,
     ibv_qp_mmap_container, ibv_qp_modify_container, ibv_qp_post_recv_container, ibv_qp_post_send_container, TypeSize, UverbsCmd, UVERBS_CMD_CREATE_CQ,
     UVERBS_CMD_CREATE_QP, UVERBS_CMD_DEREGISTER_MR, UVERBS_CMD_DESTROY_CQ, UVERBS_CMD_DESTROY_QP, UVERBS_CMD_MMAP_CQ, UVERBS_CMD_MMAP_QP,
     UVERBS_CMD_MODIFY_QP, UVERBS_CMD_POLL_CQ, UVERBS_CMD_POST_RECV, UVERBS_CMD_POST_SEND, UVERBS_CMD_QUERY_DEVICE, UVERBS_CMD_QUERY_DEVICES,
     UVERBS_CMD_QUERY_PORT, UVERBS_CMD_REGISTER_MR, UVERBS_MAGIC, UVERBS_MINOR_NOT_PRESENT, UVERBS_MINOR_PRESENT,
 }};
 use syscall::return_vals::{Errno, SyscallResult};
+use x86_64::VirtAddr;
 
 static UVERBS_SUPPORTED_MINOR_TABLE: &[usize] = &[
     UVERBS_CMD_QUERY_DEVICE,
@@ -32,7 +32,14 @@ static UVERBS_SUPPORTED_MINOR_TABLE: &[usize] = &[
 ];
 
 pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
-    let UverbsCmd::Call(_, _, size, magic, has_minor) = UverbsCmd::decode(cmd as u64);
+    // `size` (the cmd-encoded container size) no longer needs to be read out
+    // here: every arm below now copies through `copy_from_user`/
+    // `copy_to_user`, which derive their length from the destination Rust
+    // type's `size_of::<T>()` - exactly how each `UVERBS_CMD_*` constant's
+    // encoded size was computed in the first place (`uverbs_uapi.rs`), so
+    // this isn't a loosening of that invariant, just no longer needing a
+    // separate runtime read of it.
+    let UverbsCmd::Call(_, _, _size, magic, has_minor) = UverbsCmd::decode(cmd as u64);
 
     let process = process_manager().read().current_process();
 
@@ -62,242 +69,178 @@ pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
         }
         UVERBS_CMD_QUERY_PORT => {
             let __user_buf = arg as *mut ibv_port_attr_container;
+            let mut __kernel_container = ibv_port_attr_container::default();
 
-            let mut __kernel_buf_arr = [0u8; ibv_port_attr_container::S];
-            let __kernel_buf = __kernel_buf_arr.as_mut_ptr();
+            process.virtual_address_space.copy_from_user(from_mut(&mut __kernel_container), __user_buf as *const _).map_err(|_| Errno::EINVAL)?;
 
+            __kernel_container.ibv_port_attr = uverbs_query_port(minor, __kernel_container.port_num).map_err(|_| Errno::EINVAL)?;
 
-            let __user_port_off = offset_of!(ibv_port_attr_container, port_num);
-            let __user_port_attr_off = offset_of!(ibv_port_attr_container, ibv_port_attr);
-
-            let __user_buf_port_num = unsafe { __user_buf.cast::<u8>().add(__user_port_off) };
-            let __user_buf_port_attr = unsafe { __user_buf.cast::<u8>().add(__user_port_attr_off) };
-
-            unsafe { copy_nonoverlapping(__user_buf_port_num, __kernel_buf, ibv_port_attr_container::S) };
-
-            let port_num = unsafe { *__kernel_buf };
-
-            let port_attr = uverbs_query_port(minor, port_num).map_err(|_| Errno::EINVAL)?;
-            let __kernel_buf_port_attr = &port_attr as *const ibv_port_attr as *const u8;
-
-            unsafe { copy_nonoverlapping(__kernel_buf_port_attr, __user_buf_port_attr, size_of::<ibv_port_attr>()) };
+            process.virtual_address_space.copy_to_user(__user_buf, &[__kernel_container]).map_err(|_| Errno::EINVAL)?;
 
             Ok(0)
         }
         UVERBS_CMD_REGISTER_MR => {
             let __user_buf = arg as *mut ibv_mr_container;
+            let mut __kernel_ibv_mr_container = ibv_mr_container::default();
 
-            let __user_ibv_mr_res_off = offset_of!(ibv_mr_container, ibv_mr_res);
-            let __user_ibv_mr_res = unsafe { __user_buf.cast::<u8>().add(__user_ibv_mr_res_off) };
-
-
-            let mut __kernel_ibv_mr_container: ibv_mr_container = Default::default();
-
-            let __kernel_copy_size = offset_of!(ibv_mr_container, len) + size_of::<usize>();
-
-            unsafe { copy_nonoverlapping(
-                __user_buf.cast(),
-                &mut __kernel_ibv_mr_container as *mut ibv_mr_container as *mut u8,
-                __kernel_copy_size,
-            ) };
+            process.virtual_address_space.copy_from_user(from_mut(&mut __kernel_ibv_mr_container), __user_buf as *const _).map_err(|_| Errno::EINVAL)?;
 
             let supported_len = __kernel_ibv_mr_container.len.min(ibv_mr_container::S);
 
+            // `data_ptr`/`len` describe memory that gets DMA'd in place (by
+            // the HCA, later) rather than copied into a kernel buffer, so
+            // `copy_from_user`'s "copy into a kernel-owned Copy value"
+            // shape doesn't apply here. Validate the range the same way
+            // `copy_from_user`/`copy_to_user` do (bounds-check via
+            // `access_ok`) before handing the raw pointer to
+            // `from_raw_parts_mut` and onward into DMA registration.
+            let data_addr = VirtAddr::new(__kernel_ibv_mr_container.data_ptr as u64);
+            if !process.virtual_address_space.is_user_range_ok(data_addr, supported_len) {
+                return Err(Errno::EINVAL);
+            }
+
             let __user_data_ref = unsafe { from_raw_parts_mut(__kernel_ibv_mr_container.data_ptr, supported_len) };
 
-            let ibv_mr_res = uverbs_register_mem_region(minor, __kernel_ibv_mr_container.ibv_access_flags, __user_data_ref).map_err(|_| Errno::EINVAL)?;
+            __kernel_ibv_mr_container.ibv_mr_res =
+                uverbs_register_mem_region(minor, __kernel_ibv_mr_container.ibv_access_flags, __user_data_ref).map_err(|_| Errno::EINVAL)?;
 
-            unsafe { copy_nonoverlapping(&ibv_mr_res as *const ibv_mr_res as *const u8, __user_ibv_mr_res, size_of::<ibv_mr_res>()) };
+            process.virtual_address_space.copy_to_user(__user_buf, &[__kernel_ibv_mr_container]).map_err(|_| Errno::EINVAL)?;
 
             Ok(0)
         }
         UVERBS_CMD_CREATE_CQ => {
             let __user_buf = arg as *mut ibv_cq_container;
-            let __user_cq_num_off = offset_of!(ibv_cq_container, cq_num);
-            let __user_cq_num = unsafe { __user_buf.cast::<u8>().add(__user_cq_num_off) };
-
             let mut __kernel_cq_container = ibv_cq_container::default();
 
-            unsafe { copy_nonoverlapping(
-                __user_buf.cast(),
-                &mut __kernel_cq_container as *mut ibv_cq_container as *mut u8,
-                size.into(),
-            ) };
+            process.virtual_address_space.copy_from_user(from_mut(&mut __kernel_cq_container), __user_buf as *const _).map_err(|_| Errno::EINVAL)?;
 
-            let cq_num_ref = uverbs_create_cq(minor, &mut __kernel_cq_container).map_err(|_| Errno::EINVAL)?;
+            uverbs_create_cq(minor, &mut __kernel_cq_container).map_err(|_| Errno::EINVAL)?;
 
-            unsafe { copy_nonoverlapping(cq_num_ref as *const u32 as *const u8,__user_cq_num,  size_of::<u32>()) };
+            process.virtual_address_space.copy_to_user(__user_buf, &[__kernel_cq_container]).map_err(|_| Errno::EINVAL)?;
             Ok(0)
         }
         UVERBS_CMD_CREATE_QP => {
             let __user_buf = arg as *mut ibv_qp_container;
-
-            let __user_qp_num_off = offset_of!(ibv_qp_container, qp_num);
-            let __user_qp_num = unsafe { __user_buf.cast::<u8>().add(__user_qp_num_off) };
-
             let mut __kernel_qp_container = ibv_qp_container::default();
-            let mut __kernel_ib_caps = ibv_qp_cap::default();
 
-            unsafe { copy_nonoverlapping(
-                __user_buf.cast(),
-                &mut __kernel_qp_container as *mut ibv_qp_container as *mut u8,
-                size.into(),
-            ) };
+            process.virtual_address_space.copy_from_user(from_mut(&mut __kernel_qp_container), __user_buf as *const _).map_err(|_| Errno::EINVAL)?;
 
-            unsafe {copy_nonoverlapping(
-                __kernel_qp_container.ib_caps.cast(),
-                &mut __kernel_ib_caps as *mut ibv_qp_cap as *mut u8,
-                ibv_qp_container::S,
-            ) };
+            // This used to be a second copy_nonoverlapping dereferencing
+            // `ib_caps: *mut ibv_qp_cap` (a raw user pointer, entirely
+            // unvalidated) plus a pointer-patch-back dance so
+            // `uverbs_create_qp` could mutate it in place. `ibv_qp_cap` is
+            // fully POD (5x u32, see `os/library/rdma/src/ib_core.rs`), so
+            // it is now embedded by value in `ibv_qp_container` instead -
+            // the single copy_from_user above already pulled it in, and
+            // `uverbs_create_qp` mutates `__kernel_qp_container.ib_caps`
+            // directly.
+            uverbs_create_qp(minor, &mut __kernel_qp_container).map_err(|_| Errno::EINVAL)?;
 
-            __kernel_qp_container.ib_caps = &mut __kernel_ib_caps;
-
-            let qp_num_ref = uverbs_create_qp(minor, &mut __kernel_qp_container).map_err(|_| Errno::EINVAL)?;
-            unsafe { copy_nonoverlapping(qp_num_ref as *const u32 as *const u8, __user_qp_num, size_of::<u32>()) };
+            process.virtual_address_space.copy_to_user(__user_buf, &[__kernel_qp_container]).map_err(|_| Errno::EINVAL)?;
             Ok(0)
         }
         UVERBS_CMD_MODIFY_QP => {
             let __user_buf = arg as *mut ibv_qp_modify_container;
-
             let mut __kernel_qp_modify_container = ibv_qp_modify_container::default();
-            let mut __kernel_qp_attr = ibv_qp_attr::default();
 
-            unsafe { copy_nonoverlapping(
-                __user_buf.cast(),
-                &mut __kernel_qp_modify_container as *mut ibv_qp_modify_container as *mut u8,
-                size.into(),
-            ) };
+            process.virtual_address_space.copy_from_user(from_mut(&mut __kernel_qp_modify_container), __user_buf as *const _).map_err(|_| Errno::EINVAL)?;
 
-            unsafe { copy_nonoverlapping(
-                __kernel_qp_modify_container.attr.cast(),
-                &mut __kernel_qp_attr as *mut ibv_qp_attr as *mut u8,
-                ibv_qp_modify_container::S,
-            ) };
-
-            __kernel_qp_modify_container.attr = &mut __kernel_qp_attr;
-
-            let _ = uverbs_modify_qp(minor, __kernel_qp_modify_container).map_err(|_| Errno::EINVAL)?;
+            // Same simplification as CREATE_QP above: `attr: *const
+            // ibv_qp_attr` (unvalidated user pointer + second copy) becomes
+            // `attr: ibv_qp_attr` embedded by value (`ibv_qp_attr` is POD -
+            // scalars/enums plus POD `ibv_ah_attr` -> `ibv_global_route` ->
+            // `ibv_gid`), pulled in by the single copy_from_user above.
+            uverbs_modify_qp(minor, __kernel_qp_modify_container).map_err(|_| Errno::EINVAL)?;
 
             Ok(0)
         }
         UVERBS_CMD_POLL_CQ => {
             let __user_buf = arg as *mut ibv_cq_poll_container;
-
             let mut __kernel_cq_poll_container = ibv_cq_poll_container::default();
 
-            unsafe { copy_nonoverlapping(
-                __user_buf.cast(),
-                &mut __kernel_cq_poll_container as *mut ibv_cq_poll_container as *mut u8,
-                size.into(),
-            ) };
+            process.virtual_address_space.copy_from_user(from_mut(&mut __kernel_cq_poll_container), __user_buf as *const _).map_err(|_| Errno::EINVAL)?;
 
+            // NOTE: preserved as-is from the pre-existing code: this clamps
+            // a *count* (`wc_len`) against `ibv_cq_poll_container::S`, which
+            // is a *byte* size (`size_of::<ibv_wc>() * UVERBS_MAX_USER_WC_REQ`).
+            // That means the effective clamp is far larger than
+            // `UVERBS_MAX_USER_WC_REQ` entries. This looks like a
+            // pre-existing off-by-a-large-factor oddity, not something
+            // introduced here; left unchanged since fixing the clamp
+            // formula is outside this hardening pass's scope (a genuinely
+            // huge `wc_len` still only costs a kernel `Vec` allocation that
+            // can fail cleanly, not a memory-safety issue).
             let supported_len = __kernel_cq_poll_container.wc_len.min(ibv_cq_poll_container::S);
 
             let mut __kernel_wc_buf = vec![ibv_wc::default(); supported_len];
 
             let wc_count = uverbs_poll_cq(minor, __kernel_cq_poll_container.cq_num, &mut __kernel_wc_buf[..]).map_err(|_| Errno::EINVAL)?;
 
-            // still contains user pointer
-            unsafe { copy_nonoverlapping(
-                __kernel_wc_buf.as_ptr() as *const u8,
-                __kernel_cq_poll_container.wc as *mut u8,
-                wc_count * size_of::<ibv_wc>(),
-            ) };
+            // Previously a raw copy_nonoverlapping straight into the
+            // unvalidated `wc` user pointer - now goes through
+            // copy_to_user, which bounds-checks and page-checks the
+            // destination the same way every other output path here does.
+            process.virtual_address_space.copy_to_user(__kernel_cq_poll_container.wc, &__kernel_wc_buf[..wc_count]).map_err(|_| Errno::EINVAL)?;
 
             Ok(wc_count)
         }
-        // for now we just check the ibv_send_wr struct, not the internal pointers it points to which
-        // needs to be done to prevent security issues !
         UVERBS_CMD_POST_SEND => {
             let __user_buf = arg as *mut ibv_qp_post_send_container;
+            let mut __kernel_container = ibv_qp_post_send_container::default();
 
-            let mut __kernel_ibv_send_container_wr = ibv_qp_post_send_container::default();
-            let mut __kernel_ibv_send_wr = ibv_send_wr::default();
+            process.virtual_address_space.copy_from_user(from_mut(&mut __kernel_container), __user_buf as *const _).map_err(|_| Errno::EINVAL)?;
 
-            unsafe { copy_nonoverlapping(
-                __user_buf.cast(),
-                &mut __kernel_ibv_send_container_wr as *mut ibv_qp_post_send_container as *mut u8,
-                size as usize,
-            ) };
-
-            unsafe { copy_nonoverlapping(
-                __kernel_ibv_send_container_wr.ibv_send_wr.cast(),
-                &mut  __kernel_ibv_send_wr as *mut ibv_send_wr as *mut u8,
-                ibv_qp_post_send_container::S,
-            ) };
-            __kernel_ibv_send_container_wr.ibv_send_wr = &mut __kernel_ibv_send_wr as *mut _;
-
-            // TODO next, sg_list, have to be checked before proceding
-
-            let _ = uverbs_post_send(minor, &__kernel_ibv_send_container_wr).map_err(|_| Errno::EINVAL);
+            // `ibv_send_wr` (the linked-list, Vec<ibv_sge>-backed type used
+            // by the high-level API) is not POD, so the old code raw-byte-
+            // copied a `Vec`'s internal (ptr, len, cap) triple out of user
+            // memory - unsound independent of the missing validation, and
+            // `curr.next` was a raw user pointer dereferenced directly in
+            // the kernel. `ibv_qp_post_send_container` now embeds a fully
+            // POD `ibv_send_wr_uapi` (fixed-capacity `sg_list` array, no
+            // `next`) by value, so the single copy_from_user above is
+            // sufficient - no nested-pointer validation needed. WQE chains
+            // are walked in userspace instead
+            // (`os/library/ibverbs/src/ibverbs_sys.rs`'s `ibv_post_send`
+            // issues one syscall per WR). `sg_list` bounds (`num_sge` vs.
+            // the fixed array length, and vs. the QP's negotiated
+            // `max_send_sge`) are checked in
+            // `os/kernel/src/device/mlx4/queue_pair.rs::post_send`.
+            uverbs_post_send(minor, &__kernel_container).map_err(|_| Errno::EINVAL)?;
 
             Ok(0)
         }
-        // same as above
         UVERBS_CMD_POST_RECV => {
             let __user_buf = arg as *mut ibv_qp_post_recv_container;
+            let mut __kernel_container = ibv_qp_post_recv_container::default();
 
-            let mut __kernel_ibv_recv_container_wr = ibv_qp_post_recv_container::default();
-            let mut __kernel_ibv_recv_wr = ibv_recv_wr::default();
+            process.virtual_address_space.copy_from_user(from_mut(&mut __kernel_container), __user_buf as *const _).map_err(|_| Errno::EINVAL)?;
 
-            unsafe { copy_nonoverlapping(
-                __user_buf.cast(),
-                &mut __kernel_ibv_recv_container_wr as *mut ibv_qp_post_recv_container as *mut u8,
-                size as usize,
-            ) };
-
-            unsafe { copy_nonoverlapping(
-                __kernel_ibv_recv_container_wr.ibv_recv_wr.cast(),
-                &mut  __kernel_ibv_recv_wr as *mut ibv_recv_wr as *mut u8,
-                ibv_qp_post_send_container::S,
-            ) };
-            __kernel_ibv_recv_container_wr.ibv_recv_wr = &mut __kernel_ibv_recv_wr as *mut _;
-
-            // TODO next, sg_list, have to be checked before proceding
-
-            let _ = uverbs_post_recv(minor, &__kernel_ibv_recv_container_wr).map_err(|_| Errno::EINVAL);
+            // Same rationale as POST_SEND above.
+            uverbs_post_recv(minor, &__kernel_container).map_err(|_| Errno::EINVAL)?;
 
             Ok(0)
         }
         UVERBS_CMD_MMAP_QP => {
             let __user_buf = arg as *mut ibv_qp_mmap_container;
-
             let mut __kernel_qp_mmap_container = ibv_qp_mmap_container::default();
 
-            unsafe { copy_nonoverlapping(
-                __user_buf.cast(),
-                &mut __kernel_qp_mmap_container as *mut ibv_qp_mmap_container as *mut u8,
-                size.into(),
-            ) };
+            process.virtual_address_space.copy_from_user(from_mut(&mut __kernel_qp_mmap_container), __user_buf as *const _).map_err(|_| Errno::EINVAL)?;
 
             uverbs_mmap_qp(minor, &mut __kernel_qp_mmap_container).map_err(|_| Errno::EINVAL)?;
 
-            unsafe { copy_nonoverlapping(
-                &__kernel_qp_mmap_container as *const ibv_qp_mmap_container as *const u8,
-                __user_buf as *mut u8,
-                size_of::<ibv_qp_mmap_container>(),
-            ) };
+            process.virtual_address_space.copy_to_user(__user_buf, &[__kernel_qp_mmap_container]).map_err(|_| Errno::EINVAL)?;
 
             Ok(0)
         }
         UVERBS_CMD_MMAP_CQ => {
             let __user_buf = arg as *mut ibv_cq_mmap_container;
-
             let mut __kernel_cq_mmap_container = ibv_cq_mmap_container::default();
 
-            unsafe { copy_nonoverlapping(
-                __user_buf.cast(),
-                &mut __kernel_cq_mmap_container as *mut ibv_cq_mmap_container as *mut u8,
-                size.into(),
-            ) };
+            process.virtual_address_space.copy_from_user(from_mut(&mut __kernel_cq_mmap_container), __user_buf as *const _).map_err(|_| Errno::EINVAL)?;
 
             uverbs_mmap_cq(minor, &mut __kernel_cq_mmap_container).map_err(|_| Errno::EINVAL)?;
 
-            unsafe { copy_nonoverlapping(
-                &__kernel_cq_mmap_container as *const ibv_cq_mmap_container as *const u8,
-                __user_buf as *mut u8,
-                size_of::<ibv_cq_mmap_container>(),
-            ) };
+            process.virtual_address_space.copy_to_user(__user_buf, &[__kernel_cq_mmap_container]).map_err(|_| Errno::EINVAL)?;
 
             Ok(0)
         }

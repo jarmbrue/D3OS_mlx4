@@ -51,9 +51,7 @@ pub fn uverbs_create_cq<'cq>(minor: usize, cq_container: &'cq mut ibv_cq_contain
 pub fn uverbs_create_qp<'qp>(minor: usize, qp_container: &'qp mut ibv_qp_container) -> Result<&'qp u32, &'static str> {
     let number = get_dev_list().lock()
         .get_mut(minor_to_idx(minor)).unwrap()
-        .create_qp(qp_container.qp_type, qp_container.send_cq_num, qp_container.recv_cq_num, unsafe {
-            qp_container.ib_caps.as_mut().unwrap()
-        })?;
+        .create_qp(qp_container.qp_type, qp_container.send_cq_num, qp_container.recv_cq_num, &mut qp_container.ib_caps)?;
 
     qp_container.qp_num = number;
     Ok(&qp_container.qp_num)
@@ -64,7 +62,7 @@ pub fn uverbs_modify_qp(minor: usize, qp_modify_container: ibv_qp_modify_contain
         .get_mut(minor_to_idx(minor)).unwrap()
         .modify_qp(
         qp_modify_container.qp_num,
-        unsafe { qp_modify_container.attr.as_ref().unwrap() },
+        &qp_modify_container.attr,
         qp_modify_container.attr_mask,
     )
 }
@@ -78,13 +76,13 @@ pub fn uverbs_poll_cq(minor: usize, cq_num: u32, wc: &mut [ibv_wc]) -> Result<us
 pub fn uverbs_post_send(minor: usize, send_container_wr: &ibv_qp_post_send_container) -> Result<(), &'static str> {
     get_dev_list().lock()
         .get_mut(minor_to_idx(minor)).unwrap()
-        .post_send(send_container_wr.qp_num, unsafe { send_container_wr.ibv_send_wr.as_mut().unwrap() })
+        .post_send(send_container_wr.qp_num, &send_container_wr.wr)
 }
 
 pub fn uverbs_post_recv(minor: usize, recv_container_wr: &ibv_qp_post_recv_container) -> Result<(), &'static str> {
     get_dev_list().lock()
         .get_mut(minor_to_idx(minor)).unwrap()
-        .post_receive(recv_container_wr.qp_num, unsafe { recv_container_wr.ibv_recv_wr.as_mut().unwrap() })
+        .post_receive(recv_container_wr.qp_num, &recv_container_wr.wr)
 }
 
 pub fn uverbs_destroy(minor: usize, destroy_spec_fn: fn(&mut ConnectX3Nic, u32) -> Result<(), &'static str>, x_num: u32) -> Result<(), &'static str> {
