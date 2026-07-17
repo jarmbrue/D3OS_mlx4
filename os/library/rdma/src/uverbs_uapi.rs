@@ -73,6 +73,17 @@ pub const UVERBS_MAX_USER_TRUST_SIZE: usize = 0x06400000; // allow user space to
 pub const UVERBS_MAX_USER_WC_REQ: usize = 16000;
 pub const UVERBS_MAX_QUERY_DEVICES_REQ: usize = 10;
 
+/// Maximum number of scatter/gather elements a single POD wire-format work
+/// request ([`ibv_send_wr_uapi`]/[`ibv_recv_wr_uapi`]) can carry. Every
+/// consumer in this repo (`os/application/rdma/mlx4`,
+/// `os/application/perftest`) requests `max_send_sge`/`max_recv_sge == 1`;
+/// this generous fixed bound costs nothing in practice while comfortably
+/// covering the driver's own negotiated caps
+/// (`WorkQueue::new_send_queue`/`new_receive_queue`,
+/// `os/kernel/src/device/mlx4/queue_pair.rs`), which are bounded further by
+/// the HCA's max WQE size (`hca_caps.max_desc_sz_sq()`) well below this.
+pub const UVERBS_MAX_SGE: usize = 32;
+
 const CHAR_BUF: &[u8] = &[0u8; 64];
 
 pub const UVERBS_CMD_QUERY_DEVICES: usize = UverbsCmd::Call(UverbsInnerCmd::QueryDevices, 1, 0, UVERBS_MAGIC, UVERBS_MINOR_NOT_PRESENT).encode();
@@ -110,32 +121,12 @@ impl TypeSize for ibv_device_attr {
     const S: usize = CHAR_BUF.len();
 }
 
-impl TypeSize for ibv_port_attr_container {
-    const S: usize = size_of::<u8>();
-}
-
 impl TypeSize for ibv_mr_container {
     const S: usize = UVERBS_MAX_USER_TRUST_SIZE;
 }
 
-impl TypeSize for ibv_qp_container {
-    const S: usize = size_of::<ibv_qp_cap>();
-}
-
-impl TypeSize for ibv_qp_modify_container {
-    const S: usize = size_of::<ibv_qp_attr>();
-}
-
 impl TypeSize for ibv_cq_poll_container {
     const S: usize = size_of::<ibv_wc>() * UVERBS_MAX_USER_WC_REQ;
-}
-
-impl TypeSize for ibv_qp_post_send_container {
-    const S: usize = size_of::<ibv_send_wr>();
-}
-
-impl TypeSize for ibv_qp_post_recv_container {
-    const S: usize = size_of::<ibv_recv_wr>();
 }
 
 #[repr(C)]
@@ -145,13 +136,14 @@ pub struct ibv_device_attr_container {
 }
 
 #[repr(C)]
+#[derive(Default, Clone, Copy)]
 pub struct ibv_port_attr_container {
     pub ibv_port_attr: ibv_port_attr,
     pub port_num: u8
 }
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct ibv_mr_container {
     pub ibv_access_flags: ibv_access_flags,
     pub data_ptr: *mut u8,
@@ -160,7 +152,7 @@ pub struct ibv_mr_container {
 }
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct ibv_mr_res {
     pub index: u32,
     pub addr: usize,
@@ -169,26 +161,77 @@ pub struct ibv_mr_res {
 }
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct ibv_cq_container {
     pub cq_entries: i32,
     pub cq_num: u32
 }
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct ibv_cq_poll_container {
     pub wc: *mut ibv_wc,
     pub wc_len: usize,
     pub cq_num: u32,
 }
 
+/// Fully POD wire-format representation of a single send work request, used
+/// only for the `UVERBS_CMD_POST_SEND` syscall boundary - distinct from the
+/// heap-allocated, linked-list `ibv_send_wr` (`Vec<ibv_sge>` + `next: *mut
+/// Self`) used by the higher-level `os/library/ibverbs` API and the
+/// kernel-bypass fast path, which never crosses the syscall boundary and so
+/// doesn't need to be POD. `sg_list` is a fixed-capacity array instead of a
+/// `Vec` (bounded by [`UVERBS_MAX_SGE`]), and there is no `next` pointer -
+/// WQE chains are walked in userspace instead
+/// (`os/library/ibverbs/src/ibverbs_sys.rs`'s `ibv_post_send`), issuing one
+/// `Uverb` syscall per work request rather than one per chain.
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ibv_send_wr_uapi {
+    pub wr_id: u64,
+    pub sg_list: [ibv_sge; UVERBS_MAX_SGE],
+    pub num_sge: u32,
+    pub opcode: ibv_wr_opcode,
+    pub send_flags: ibv_send_flags,
+    pub wr: ibv_send_wr_wr,
+}
+
+impl Default for ibv_send_wr_uapi {
+    fn default() -> Self {
+        Self {
+            wr_id: 0,
+            sg_list: [ibv_sge::default(); UVERBS_MAX_SGE],
+            num_sge: 0,
+            opcode: ibv_wr_opcode::IBV_WR_SEND,
+            send_flags: ibv_send_flags::empty(),
+            wr: Default::default(),
+        }
+    }
+}
+
+/// Fully POD wire-format representation of a single receive work request.
+/// See [`ibv_send_wr_uapi`] for the general rationale.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ibv_recv_wr_uapi {
+    pub wr_id: u64,
+    pub sg_list: [ibv_sge; UVERBS_MAX_SGE],
+    pub num_sge: u32,
+}
+
+impl Default for ibv_recv_wr_uapi {
+    fn default() -> Self {
+        Self { wr_id: 0, sg_list: [ibv_sge::default(); UVERBS_MAX_SGE], num_sge: 0 }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct ibv_qp_container {
     pub qp_type: ibv_qp_type::Type,
     pub send_cq_num: u32,
     pub recv_cq_num: u32,
-    pub ib_caps: *mut ibv_qp_cap,
+    pub ib_caps: ibv_qp_cap,
     pub qp_num: u32
 }
 
@@ -205,9 +248,10 @@ impl Default for ibv_qp_container {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct ibv_qp_modify_container {
     pub qp_num: u32,
-    pub attr: *const ibv_qp_attr,
+    pub attr: ibv_qp_attr,
     pub attr_mask: ibv_qp_attr_mask
 }
 
@@ -249,16 +293,16 @@ impl Default for ibv_recv_wr {
 }
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct ibv_qp_post_send_container {
-    pub ibv_send_wr: *mut ibv_send_wr,
+    pub wr: ibv_send_wr_uapi,
     pub qp_num: u32
 }
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct ibv_qp_post_recv_container {
-    pub ibv_recv_wr: *mut ibv_recv_wr,
+    pub wr: ibv_recv_wr_uapi,
     pub qp_num: u32
 }
 
@@ -270,7 +314,7 @@ pub struct ibv_qp_post_recv_container {
 /// `WorkQueue::new_send_queue`/`new_receive_queue` compute kernel-side from
 /// HCA capabilities userspace cannot otherwise observe.
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct ibv_qp_mmap_container {
     pub qp_num: u32,
     /// Combined SQ+RQ ring buffer.
@@ -301,7 +345,7 @@ pub struct ibv_qp_mmap_container {
 /// Kernel-bypass fast path setup for a completion queue. Same shape as
 /// [`ibv_qp_mmap_container`], see its docs for the general pattern.
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct ibv_cq_mmap_container {
     pub cq_num: u32,
     pub cqe_ring_addr: usize,
