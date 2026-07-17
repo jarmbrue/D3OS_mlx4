@@ -286,20 +286,31 @@ impl ConnectX3Nic {
 
     /// Poll a completion queue and return the number of new completions.
     ///
-    /// This is used by ibv_poll_cq.
-    pub fn poll_cq(&mut self, number: u32, wc: &mut [ibv_wc]) -> Result<usize, &'static str> {
+    /// This is used by ibv_poll_cq. Refuses to poll a CQ created by a
+    /// different process (`ERR_NOT_OWNER`) - this is also the check
+    /// extension 1's eventual blocking `poll_cq` design gates
+    /// "may this caller block-wait on this CQ" on, so keep it as the single,
+    /// obviously-reusable choke point.
+    pub fn poll_cq(&mut self, number: u32, caller: Uuid, wc: &mut [ibv_wc]) -> Result<usize, &'static str> {
         let cq = self.cqs.iter_mut().find(|cq| cq.number() == number).ok_or("invalid completion queue number")?;
+        if cq.creator() != caller {
+            return Err(ERR_NOT_OWNER);
+        }
         cq.poll(&mut self.eqs, &mut self.qps, &mut self.doorbells, wc)
     }
 
-    /// Destroy a completion queue.
-    pub fn destroy_cq(&mut self, number: u32) -> Result<(), &'static str> {
-        let (index, _) = self
+    /// Destroy a completion queue. Refuses to destroy a CQ created by a
+    /// different process (`ERR_NOT_OWNER`).
+    pub fn destroy_cq(&mut self, number: u32, caller: Uuid) -> Result<(), &'static str> {
+        let (index, cq) = self
             .cqs
             .iter()
             .enumerate()
             .find(|(_, cq)| cq.number() == number)
             .ok_or("completion queue not found")?;
+        if cq.creator() != caller {
+            return Err(ERR_NOT_OWNER);
+        }
         let cq = self.cqs.remove(index);
         cq.destroy(&mut self.cmd)?;
         Ok(())

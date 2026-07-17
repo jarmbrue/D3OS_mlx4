@@ -69,10 +69,10 @@ pub fn uverbs_modify_qp(minor: usize, caller: Uuid, qp_modify_container: ibv_qp_
     )
 }
 
-pub fn uverbs_poll_cq(minor: usize, cq_num: u32, wc: &mut [ibv_wc]) -> Result<usize, &'static str> {
+pub fn uverbs_poll_cq(minor: usize, caller: Uuid, cq_num: u32, wc: &mut [ibv_wc]) -> Result<usize, &'static str> {
     get_dev_list().lock()
         .get_mut(minor_to_idx(minor)).unwrap()
-        .poll_cq(cq_num, wc)
+        .poll_cq(cq_num, caller, wc)
 }
 
 pub fn uverbs_post_send(minor: usize, caller: Uuid, send_container_wr: &ibv_qp_post_send_container) -> Result<(), &'static str> {
