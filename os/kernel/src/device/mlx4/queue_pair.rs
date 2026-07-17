@@ -21,9 +21,9 @@ use modular_bitfield_msb::{
     prelude::{B12, B16, B17, B19, B2, B20, B24, B3, B4, B40, B48, B5, B53, B56, B6, B7},
 };
 use rdma::{
-    ibv_access_flags, ibv_mtu, ibv_qp_attr, ibv_qp_attr_mask, ibv_qp_cap, ibv_qp_state, ibv_qp_type, ibv_recv_wr, ibv_send_flags, ibv_send_wr, ibv_send_wr_wr,
-    ibv_wr_opcode,
+    ibv_access_flags, ibv_mtu, ibv_qp_attr, ibv_qp_attr_mask, ibv_qp_cap, ibv_qp_state, ibv_qp_type, ibv_send_flags, ibv_send_wr_wr, ibv_wr_opcode,
 };
+use rdma::uverbs_uapi::{ibv_recv_wr_uapi, ibv_send_wr_uapi};
 use rdma::mlx4_hw::{
     DoorbellPage, QueuePairDoorbell, QueuePairOpcode, WqeControlSegment, WqeControlSegmentFlags, WqeDataSegment, WqeRemoteAddressSegment,
 };
@@ -442,54 +442,46 @@ impl QueuePair {
 
     /// Post a work request to receive data.
     ///
-    /// This is used by ibv_post_recv.
-    pub(super) fn post_receive(&mut self, wr: &mut ibv_recv_wr) -> Result<(), &'static str> {
+    /// This is used by ibv_post_recv. `wr` is a single, fully POD work
+    /// request - WQE chaining (previously walked here via `curr.next`, a
+    /// raw pointer copied byte-for-byte out of user memory and then
+    /// dereferenced in the kernel, which was unsound independent of the
+    /// missing validation) now happens entirely in userspace: callers issue
+    /// one `Uverb` syscall per WR in a chain instead of one per chain
+    /// (`os/library/ibverbs/src/ibverbs_sys.rs`'s `ibv_post_recv`).
+    pub(super) fn post_receive(&mut self, wr: &ibv_recv_wr_uapi) -> Result<(), &'static str> {
         if self.state != ibv_qp_state::IBV_QPS_RTR && self.state != ibv_qp_state::IBV_QPS_RTS {
             return Err("queue pair cannot receive in this state");
         }
-        let mut index = self.rq.head;
-        let mut current = Some(wr);
-        let mut num_req = 0;
-        while current.is_some() {
-            let curr = current.take().unwrap();
-            // make sure that we're not overflowing
-            if self.rq.would_overflow(num_req) {
-                return Err("receive queue would overflow");
-            }
-            // check that this work request is not too big
-            if u32::try_from(curr.num_sge).unwrap() > self.rq.max_gs {
-                return Err("work request has too many sges");
-            }
-            let mut sge_index = 0;
-            for sge in &curr.sg_list {
-                let phys_addr = utils::get_physical_address(VirtAddr::new(sge.addr)).as_u64();
-                let elem: &mut WqeDataSegment = self.rq.get_element(self.memory.as_mut().unwrap(), index + sge_index)?;
-                elem.set(sge, phys_addr);
-                sge_index += 1;
-            }
-
-            // write wr id, so that cp can recover it
-            self.rq.update_id(index as usize, curr.wr_id);
-
-            // fill the last one
-            let last_elem: &mut WqeDataSegment = self.rq.get_element(self.memory.as_mut().unwrap(), index + sge_index)?;
-            *last_elem = WqeDataSegment::last();
-            num_req += 1;
-            index = index.wrapping_add(1);
-            // TODO: support multiple work requests
-            current = unsafe {
-                if !curr.next.is_null() {
-                    Some(&mut *curr.next)
-                } else {
-                    None
-                }
-            };
+        let num_sge = wr.num_sge as usize;
+        if num_sge > wr.sg_list.len() {
+            return Err("work request has too many sges");
         }
-        // return if we don't have anything to do
-        if num_req == 0 {
-            return Ok(());
+        let index = self.rq.head;
+        // make sure that we're not overflowing
+        if self.rq.would_overflow(0) {
+            return Err("receive queue would overflow");
         }
-        self.rq.head = self.rq.head.wrapping_add(num_req);
+        // check that this work request is not too big
+        if u32::try_from(num_sge).unwrap() > self.rq.max_gs {
+            return Err("work request has too many sges");
+        }
+        let mut sge_index = 0;
+        for sge in &wr.sg_list[..num_sge] {
+            let phys_addr = utils::get_physical_address(VirtAddr::new(sge.addr)).as_u64();
+            let elem: &mut WqeDataSegment = self.rq.get_element(self.memory.as_mut().unwrap(), index + sge_index)?;
+            elem.set(sge, phys_addr);
+            sge_index += 1;
+        }
+
+        // write wr id, so that cp can recover it
+        self.rq.update_id(index as usize, wr.wr_id);
+
+        // fill the last one
+        let last_elem: &mut WqeDataSegment = self.rq.get_element(self.memory.as_mut().unwrap(), index + sge_index)?;
+        *last_elem = WqeDataSegment::last();
+
+        self.rq.head = self.rq.head.wrapping_add(1);
         // make sure that the descriptors are written before the doorbell
         compiler_fence(Ordering::SeqCst);
         let doorbell: &mut QueuePairDoorbell = self.doorbell_page.as_type_mut(0)?;
@@ -501,27 +493,48 @@ impl QueuePair {
 
     /// Post a work request to send data.
     ///
-    /// This is used by ibv_post_send.
+    /// This is used by ibv_post_send. `wr` is a single, fully POD work
+    /// request - WQE chaining (previously walked here via `curr.next`, a
+    /// raw pointer copied byte-for-byte out of user memory and then
+    /// dereferenced in the kernel, which was unsound independent of the
+    /// missing validation) now happens entirely in userspace: callers issue
+    /// one `Uverb` syscall per WR in a chain instead of one per chain
+    /// (`os/library/ibverbs/src/ibverbs_sys.rs`'s `ibv_post_send`). The body
+    /// below is structured the same way the old per-chain-element loop body
+    /// was (same `index`/`num_req` bookkeeping, `num_req` now always either
+    /// 0 or 1) so that a single WR takes exactly the code path a
+    /// single-element chain already took before this change - notably, the
+    /// BlueFlame fast-doorbell branch below still only fires when this call
+    /// posted exactly one WR (`num_req == 1`), which is now *every* call
+    /// rather than only single-element chains; multi-WR chains that used to
+    /// share one regular-doorbell ring across N WQEs now ring N BlueFlame
+    /// (or regular) doorbells instead, since each WR is now a physically
+    /// separate post. `self.sq.pending_send_chain_size` (see its docs)
+    /// replaces the old per-call-local `chain_size` accumulator so unsignaled
+    /// WRs spread across multiple calls still retire the correct number of
+    /// queue slots when the eventual signaled completion arrives.
     pub(super) fn post_send(
-        &mut self, caps: &Capabilities, doorbells: &mut [MappedPages], blueflame: Option<&mut [MappedPages]>, wr: &mut ibv_send_wr,
+        &mut self, caps: &Capabilities, doorbells: &mut [MappedPages], blueflame: Option<&mut [MappedPages]>, wr: &ibv_send_wr_uapi,
     ) -> Result<(), &'static str> {
         if self.state != ibv_qp_state::IBV_QPS_RTS {
             return Err("queue pair cannot send in this state");
         }
+        let num_sge = wr.num_sge as usize;
+        if num_sge > wr.sg_list.len() {
+            return Err("work request has too many sges");
+        }
         // TODO: the Nautilus driver uses sq.next_wqe
         let mut index = self.sq.head;
-        let mut current = Some(wr);
         let mut num_req = 0;
-        let mut chain_size = 1;
         let memory = self.memory.as_mut().unwrap();
-        while current.is_some() {
-            let curr = current.take().unwrap();
+        {
+            let curr = wr;
             // make sure that we're not overflowing
             if self.sq.would_overflow(num_req) {
                 return Err("send queue would overflow");
             }
             // check that this work request is not too big
-            if u32::try_from(curr.num_sge).unwrap() > self.sq.max_gs {
+            if u32::try_from(num_sge).unwrap() > self.sq.max_gs {
                 return Err("work request has too many sges");
             }
             let ctrl_addr = {
@@ -559,8 +572,8 @@ impl QueuePair {
             // Write data segments in reverse order, so as to overwrite
             // cacheline stamp last within each cacheline. This avoids issues
             // with WQE prefetching.
-            wqe_offset += (usize::try_from(curr.num_sge).unwrap() - 1) * size_of::<WqeDataSegment>();
-            for sge in curr.sg_list.iter().rev() {
+            wqe_offset += (num_sge - 1) * size_of::<WqeDataSegment>();
+            for sge in curr.sg_list[..num_sge].iter().rev() {
                 let phys_addr = utils::get_physical_address(VirtAddr::new(sge.addr)).as_u64();
                 let elem: &mut WqeDataSegment = memory.0.as_type_mut(wqe_offset)?;
                 elem.set(sge, phys_addr);
@@ -587,33 +600,25 @@ impl QueuePair {
                 _ => 1 << 31,
             };
             ctrl.owner_opcode = (owner | opcode).into();
-            // We can improve latency by not stamping the last send queue WQE
-            // until after ringing the doorbell, so only stamp here if there are
-            // still more WQEs to post.
-            if !curr.next.is_null() {
-                self.sq.stamp_wqe(memory, index + self.sq.spare_wqes.unwrap())?;
-            }
+            // Chaining now happens entirely in userspace (one syscall per
+            // WR), so there is never "another WQE still to post in this
+            // call" - the early/inline stamp this used to do for non-final
+            // chain members no longer applies; every call now takes the
+            // deferred-stamp path below, same as a single-element chain did
+            // before this change.
 
             if curr.send_flags.contains(ibv_send_flags::SIGNALED) {
                 // write wr id, so that completion queue poll can recover it
                 self.sq.update_id(index as usize, curr.wr_id);
-                self.sq.update_chain_size(index as usize, chain_size);
+                self.sq.update_chain_size(index as usize, self.sq.pending_send_chain_size);
 
-                chain_size = 1;
+                self.sq.pending_send_chain_size = 1;
             } else {
-                chain_size += 1;
+                self.sq.pending_send_chain_size += 1;
             }
 
             num_req += 1;
             index = index.wrapping_add(1);
-            // TODO: support multiple work requests ; Done
-            current = unsafe {
-                if !curr.next.is_null() {
-                    Some(&mut *curr.next)
-                } else {
-                    None
-                }
-            };
         }
         // return if we don't have anything to do
         if num_req == 0 {
@@ -763,6 +768,17 @@ struct WorkQueue {
     head: u32,
     tail: u32,
     meta: Vec<WorkQueueMeta<u64, u32>>,
+    /// Send-queue only: running count of queue slots since the last
+    /// signaled WR, carried *across* `post_send` calls. Chaining used to be
+    /// walked entirely within one `post_send` call (one linked list of WRs
+    /// per syscall), so this could be a local variable reset at the top of
+    /// the loop; now that each syscall posts exactly one WR
+    /// (`ibverbs_sys.rs`'s `ibv_post_send` issues one `Uverb` syscall per WR
+    /// in a chain instead of one per chain), the accumulator has to persist
+    /// on the queue itself to reproduce the same "how many queue slots does
+    /// this signaled completion retire" accounting a multi-WR chain used to
+    /// get for free within a single call. Unused by the receive queue.
+    pending_send_chain_size: u32,
 }
 
 impl WorkQueue {
@@ -803,6 +819,7 @@ impl WorkQueue {
             head: 0,
             tail: 0,
             meta: vec![(0u64, 0u32); wqe_cnt as usize],
+            pending_send_chain_size: 1,
         })
     }
 
@@ -843,6 +860,7 @@ impl WorkQueue {
             head: 0,
             tail: 0,
             meta: vec![(0u64, 0u32); wqe_cnt as usize],
+            pending_send_chain_size: 1,
         })
     }
 
