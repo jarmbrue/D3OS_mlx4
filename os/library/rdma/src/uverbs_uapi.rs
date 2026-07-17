@@ -29,6 +29,14 @@ pub enum UverbsInnerCmd {
     QueryDevice    = 13,
     QueryPort      = 14,
     QueryDevices   = 15,
+
+    // Kernel-bypass fast path setup: map a QP's/CQ's ring buffer, doorbell
+    // record(s) and UAR doorbell/BlueFlame page(s) into the calling
+    // process, once, right after CreateQp/CreateCq. post_send/post_recv/
+    // poll_cq then operate directly on that mapped memory, without a
+    // syscall.
+    MmapQp         = 16,
+    MmapCq         = 17,
 }
 
 type MagicHeader  = u16;
@@ -81,6 +89,8 @@ pub const UVERBS_CMD_POST_RECV: usize = UverbsCmd::Call(UverbsInnerCmd::OpPostRe
 pub const UVERBS_CMD_DESTROY_CQ: usize = UverbsCmd::Call(UverbsInnerCmd::DestroyCq, 12, 0, UVERBS_MAGIC, UVERBS_MINOR_PRESENT).encode();
 pub const UVERBS_CMD_DESTROY_QP: usize = UverbsCmd::Call(UverbsInnerCmd::DestroyQp, 13, 0, UVERBS_MAGIC, UVERBS_MINOR_PRESENT).encode();
 pub const UVERBS_CMD_DEREGISTER_MR: usize = UverbsCmd::Call(UverbsInnerCmd::DeregMr, 14, 0, UVERBS_MAGIC, UVERBS_MINOR_PRESENT).encode();
+pub const UVERBS_CMD_MMAP_QP: usize = UverbsCmd::Call(UverbsInnerCmd::MmapQp, 15, size_of::<ibv_qp_mmap_container>() as u16, UVERBS_MAGIC, UVERBS_MINOR_PRESENT).encode();
+pub const UVERBS_CMD_MMAP_CQ: usize = UverbsCmd::Call(UverbsInnerCmd::MmapCq, 16, size_of::<ibv_cq_mmap_container>() as u16, UVERBS_MAGIC, UVERBS_MINOR_PRESENT).encode();
 
 #[macro_export]
 macro_rules! UVERBS_CMD_SIZE {
@@ -250,6 +260,55 @@ pub struct ibv_qp_post_send_container {
 pub struct ibv_qp_post_recv_container {
     pub ibv_recv_wr: *mut ibv_recv_wr,
     pub qp_num: u32
+}
+
+/// Kernel-bypass fast path setup for a queue pair: on input, `qp_num`
+/// identifies the QP; on output, the remaining fields describe the memory
+/// regions the kernel has just mapped into the calling process (all
+/// addresses/lengths are in the *calling process's* user address space) and
+/// the ring geometry needed to interpret them, mirroring what
+/// `WorkQueue::new_send_queue`/`new_receive_queue` compute kernel-side from
+/// HCA capabilities userspace cannot otherwise observe.
+#[repr(C)]
+#[derive(Default)]
+pub struct ibv_qp_mmap_container {
+    pub qp_num: u32,
+    /// Combined SQ+RQ ring buffer.
+    pub ring_buf_addr: usize,
+    pub ring_buf_len: usize,
+    pub sq_offset: u32,
+    pub sq_wqe_cnt: u32,
+    pub sq_wqe_shift: u32,
+    pub sq_spare_wqes: u32,
+    pub sq_max_gs: u32,
+    pub sq_max_post: u32,
+    pub rq_offset: u32,
+    pub rq_wqe_cnt: u32,
+    pub rq_wqe_shift: u32,
+    pub rq_max_gs: u32,
+    pub rq_max_post: u32,
+    /// Per-QP doorbell record (DMA host memory, cacheable).
+    pub qp_doorbell_addr: usize,
+    /// UAR doorbell MMIO page for this QP (uncacheable).
+    pub uar_doorbell_addr: usize,
+    /// BlueFlame MMIO page for this QP, if the HCA supports it; `bf_len`
+    /// is 0 otherwise.
+    pub bf_addr: usize,
+    pub bf_len: usize,
+    pub bf_reg_size: u32,
+}
+
+/// Kernel-bypass fast path setup for a completion queue. Same shape as
+/// [`ibv_qp_mmap_container`], see its docs for the general pattern.
+#[repr(C)]
+#[derive(Default)]
+pub struct ibv_cq_mmap_container {
+    pub cq_num: u32,
+    pub cqe_ring_addr: usize,
+    pub cqe_ring_len: usize,
+    pub num_entries: u32,
+    /// Per-CQ doorbell record (DMA host memory, cacheable).
+    pub cq_doorbell_addr: usize,
 }
 
 impl From<(u32, usize, u32, u32)> for ibv_mr_res {

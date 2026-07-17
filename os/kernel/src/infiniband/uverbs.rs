@@ -6,11 +6,11 @@ use core::ptr::copy_nonoverlapping;
 use core::{mem::offset_of, slice::from_raw_parts_mut};
 use rdma::uverbs_uapi::UVERBS_MAX_QUERY_DEVICES_REQ;
 use rdma::{ibv_device, ibv_device_attr, ibv_port_attr, ibv_qp_attr, ibv_qp_cap, ibv_recv_wr, ibv_send_wr, ibv_wc, uverbs_uapi::{
-    ibv_cq_container, ibv_cq_poll_container, ibv_mr_container, ibv_mr_res, ibv_port_attr_container, ibv_qp_container,
-    ibv_qp_modify_container, ibv_qp_post_recv_container, ibv_qp_post_send_container, TypeSize, UverbsCmd, UVERBS_CMD_CREATE_CQ,
-    UVERBS_CMD_CREATE_QP, UVERBS_CMD_DEREGISTER_MR, UVERBS_CMD_DESTROY_CQ, UVERBS_CMD_DESTROY_QP, UVERBS_CMD_MODIFY_QP, UVERBS_CMD_POLL_CQ,
-    UVERBS_CMD_POST_RECV, UVERBS_CMD_POST_SEND, UVERBS_CMD_QUERY_DEVICE, UVERBS_CMD_QUERY_DEVICES, UVERBS_CMD_QUERY_PORT, UVERBS_CMD_REGISTER_MR,
-    UVERBS_MAGIC, UVERBS_MINOR_NOT_PRESENT, UVERBS_MINOR_PRESENT,
+    ibv_cq_container, ibv_cq_mmap_container, ibv_cq_poll_container, ibv_mr_container, ibv_mr_res, ibv_port_attr_container, ibv_qp_container,
+    ibv_qp_mmap_container, ibv_qp_modify_container, ibv_qp_post_recv_container, ibv_qp_post_send_container, TypeSize, UverbsCmd, UVERBS_CMD_CREATE_CQ,
+    UVERBS_CMD_CREATE_QP, UVERBS_CMD_DEREGISTER_MR, UVERBS_CMD_DESTROY_CQ, UVERBS_CMD_DESTROY_QP, UVERBS_CMD_MMAP_CQ, UVERBS_CMD_MMAP_QP,
+    UVERBS_CMD_MODIFY_QP, UVERBS_CMD_POLL_CQ, UVERBS_CMD_POST_RECV, UVERBS_CMD_POST_SEND, UVERBS_CMD_QUERY_DEVICE, UVERBS_CMD_QUERY_DEVICES,
+    UVERBS_CMD_QUERY_PORT, UVERBS_CMD_REGISTER_MR, UVERBS_MAGIC, UVERBS_MINOR_NOT_PRESENT, UVERBS_MINOR_PRESENT,
 }};
 use syscall::return_vals::{Errno, SyscallResult};
 
@@ -27,6 +27,8 @@ static UVERBS_SUPPORTED_MINOR_TABLE: &[usize] = &[
     UVERBS_CMD_DESTROY_CQ,
     UVERBS_CMD_DESTROY_QP,
     UVERBS_CMD_DEREGISTER_MR,
+    UVERBS_CMD_MMAP_QP,
+    UVERBS_CMD_MMAP_CQ,
 ];
 
 pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
@@ -254,6 +256,48 @@ pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
             // TODO next, sg_list, have to be checked before proceding
 
             let _ = uverbs_post_recv(minor, &__kernel_ibv_recv_container_wr).map_err(|_| Errno::EINVAL);
+
+            Ok(0)
+        }
+        UVERBS_CMD_MMAP_QP => {
+            let __user_buf = arg as *mut ibv_qp_mmap_container;
+
+            let mut __kernel_qp_mmap_container = ibv_qp_mmap_container::default();
+
+            unsafe { copy_nonoverlapping(
+                __user_buf.cast(),
+                &mut __kernel_qp_mmap_container as *mut ibv_qp_mmap_container as *mut u8,
+                size.into(),
+            ) };
+
+            uverbs_mmap_qp(minor, &mut __kernel_qp_mmap_container).map_err(|_| Errno::EINVAL)?;
+
+            unsafe { copy_nonoverlapping(
+                &__kernel_qp_mmap_container as *const ibv_qp_mmap_container as *const u8,
+                __user_buf as *mut u8,
+                size_of::<ibv_qp_mmap_container>(),
+            ) };
+
+            Ok(0)
+        }
+        UVERBS_CMD_MMAP_CQ => {
+            let __user_buf = arg as *mut ibv_cq_mmap_container;
+
+            let mut __kernel_cq_mmap_container = ibv_cq_mmap_container::default();
+
+            unsafe { copy_nonoverlapping(
+                __user_buf.cast(),
+                &mut __kernel_cq_mmap_container as *mut ibv_cq_mmap_container as *mut u8,
+                size.into(),
+            ) };
+
+            uverbs_mmap_cq(minor, &mut __kernel_cq_mmap_container).map_err(|_| Errno::EINVAL)?;
+
+            unsafe { copy_nonoverlapping(
+                &__kernel_cq_mmap_container as *const ibv_cq_mmap_container as *const u8,
+                __user_buf as *mut u8,
+                size_of::<ibv_cq_mmap_container>(),
+            ) };
 
             Ok(0)
         }

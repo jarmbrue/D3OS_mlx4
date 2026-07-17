@@ -9,3 +9,7 @@ authors = [ "Sandro Jose Leal Miudo" ]
 bitflags = "2.9.0"
 strum_macros = "0.26"
 num_enum = { version = "0.5", default-features = false }
+byteorder = { version = "1.4.3", default-features = false }
+zerocopy = "0.5.2"
+modular-bitfield-msb = "0.11.2"
+tock-registers = "0.10.1"

@@ -6,7 +6,6 @@ use crate::memory::PAGE_SIZE;
 use alloc::{format, string::String, vec::Vec};
 use core::cmp::min;
 use byteorder::BigEndian;
-use tock_registers::{register_bitfields, register_structs, registers::WriteOnly};
 use core::fmt::Debug;
 use core::ops::Shl;
 use log::{debug, trace, warn};
@@ -763,57 +762,6 @@ impl core::fmt::Debug for Capabilities {
             .finish()
     }
 }
-
-// TODO: define  DoorbellEq and DoorbellPage to register_structs!
-
-register_bitfields![u32,
-    pub SendQueueNumber [
-        NUM OFFSET(8) NUMBITS(24)
-    ],
-    pub CpSnCmdNum [
-        CPN OFFSET(0)  NUMBITS(24),
-        CMD OFFSET(24) NUMBITS(3),
-        SN  OFFSET(28) NUMBITS(2)
-    ],
-    pub CpConsumerIndex [
-        CP_CI OFFSET(0) NUMBITS(24),
-    ],
-    pub DoorbellEqField [
-        CI OFFSET(0)  NUMBITS(24),
-        A  OFFSET(31) NUMBITS(1)
-    ]
-];
-
-pub struct DoorbellEq  {
-    pub val: WriteOnly<u32, DoorbellEqField::Register>,
-    _reserved1: u32
-}
-
-register_structs! {
-    pub DoorbellPage {
-    (0x000 => _reserved1),
-    (0x014 => pub send_queue_number: WriteOnly<u32, SendQueueNumber::Register>),
-    (0x018 => _reserved2),
-
-    // CQ
-    /// contains the sequence number, the command and the cq number
-    (0x020 => pub cq_sn_cmd_num: WriteOnly<u32, CpSnCmdNum::Register>),
-    (0x024 => pub cq_consumer_index: WriteOnly<u32, CpConsumerIndex::Register>),
-
-    // skip 502 u32
-    (0x028 => _padding4),
-
-    // EQ
-    // for the EQ number n the relevant doorbell is in
-    // DoorbellPage (n / 4) and eq (n % 4)
-    (0x800 => pub eqs: [DoorbellEq; 4]),
-
-    // skip 503 u32
-    (0x820 => _padding9),
-    (0x1000 => @END),
-    }
-}
-
 
 #[bitfield]
 pub(super) struct InitHcaParameters {

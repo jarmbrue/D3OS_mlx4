@@ -7,7 +7,7 @@ use core::{
     sync::atomic::{compiler_fence, Ordering},
 };
 
-use super::queue_pair::{QueuePair, QueuePairOpcode};
+use super::queue_pair::QueuePair;
 use super::utils;
 use super::utils::{MappedPages, PageToFrameMapping};
 use crate::device::mlx4::utils::{FillOperation, OperationArgs};
@@ -16,18 +16,21 @@ use alloc::boxed::Box;
 use log::{error, trace, warn};
 use modular_bitfield_msb::{
     bitfield,
-    prelude::{B12, B4, B7},
     specifiers::{B2, B24, B3, B40, B48, B5, B6},
 };
 use rdma::{ibv_wc, ibv_wc_flags, ibv_wc_opcode, ibv_wc_status};
-use strum_macros::FromRepr;
-use tock_registers::{interfaces::Writeable, registers::WriteOnly};
+use rdma::mlx4_hw::{CompletionQueueDoorbell, CompletionQueueEntry, DoorbellPage, QueuePairOpcode, ReceiveOpcode, Syndrome};
+use tock_registers::interfaces::Writeable;
+use uuid::Uuid;
+use x86_64::PhysAddr;
+
+use crate::process_manager;
 
 use super::{
     cmd::{CommandInterface, Opcode},
     device::{uar_index_to_hw, PAGE_SHIFT},
     event_queue::EventQueue,
-    fw::{Capabilities, DoorbellPage},
+    fw::Capabilities,
     icm::{MrTable, ICM_PAGE_SHIFT},
     Offsets,
 };
@@ -39,10 +42,15 @@ pub(super) struct CompletionQueue {
     memory: Option<PageToFrameMapping>,
     uar_idx: usize,
     doorbell_page: MappedPages,
+    doorbell_address: PhysAddr,
     // TODO: somehow free this on Drop
     _mtt: u64,
     arm_sequence_number: u32,
     consumer_index: u32,
+    /// Process that created this completion queue. Used to reject
+    /// cross-process mmap requests for this CQ's ring buffer / doorbell /
+    /// UAR pages.
+    creator: Uuid,
     // TODO: bind the lifetime to the one of the event queue
     eq_number: Option<usize>,
 }
@@ -90,16 +98,19 @@ impl CompletionQueue {
         ctx.set_doorbell_record_addr(doorbell_address.as_u64());
         let _: () = cmd.execute_command(Opcode::Sw2HwCq, (), &ctx.bytes[..], number.try_into().unwrap())?;
 
+        let creator = process_manager().read().current_process().id();
         let cq = Self {
             number,
             num_entries,
             memory: Some(mapped_page_to_frame),
             uar_idx,
             doorbell_page,
+            doorbell_address,
             _mtt: mtt,
             arm_sequence_number,
             consumer_index,
             eq_number,
+            creator,
         };
         trace!("created new CQ: {:?}", cq);
         Ok(cq)
@@ -330,6 +341,34 @@ impl CompletionQueue {
     pub(super) fn number(&self) -> u32 {
         self.number
     }
+
+    /// Get the process that created this completion queue.
+    pub(super) fn creator(&self) -> Uuid {
+        self.creator
+    }
+
+    /// Physical start address and byte length of this CQ's CQE ring buffer.
+    /// Used to mmap it into the owning process.
+    pub(super) fn ring_buffer_region(&self) -> (PhysAddr, usize) {
+        let memory = self.memory.as_ref().unwrap();
+        (memory.1, memory.0.into_range().len() as usize * PAGE_SIZE)
+    }
+
+    /// Physical address of this CQ's doorbell-record page (DMA host memory,
+    /// not MMIO).
+    pub(super) fn doorbell_phys_addr(&self) -> PhysAddr {
+        self.doorbell_address
+    }
+
+    /// Index into the NIC's UAR doorbell page vector for this CQ.
+    pub(super) fn uar_idx(&self) -> usize {
+        self.uar_idx
+    }
+
+    /// Number of CQE entries in this CQ (a power of two).
+    pub(super) fn entry_count(&self) -> u32 {
+        self.num_entries
+    }
 }
 
 impl Drop for CompletionQueue {
@@ -396,65 +435,3 @@ struct CompletionQueueContext {
     doorbell_record_addr: u64,
 }
 
-#[repr(C)]
-struct CompletionQueueDoorbell {
-    update_consumer_index: WriteOnly<u32>,
-    arm_consumer_index: WriteOnly<u32>,
-}
-
-// CQE size is 32. There is 64 B support also available in CX3.
-#[bitfield(bytes = 32)]
-#[derive(Debug)]
-struct CompletionQueueEntry {
-    #[skip]
-    __: u8,
-    qp_number: B24,
-    immed_rss_invalid: u32,
-    g: bool,
-    mlpath: B7,
-    rqpn: B24,
-    sl: B4,
-    #[skip]
-    vid: B12,
-    slid: u16,
-    #[skip]
-    __: u32,
-    byte_cnt: u32,
-    wqe_index: u16,
-    /// vendor_err_syndrome (u8) and syndrome (u8) on error
-    checksum: u16,
-    #[skip]
-    __: B24,
-    owner: bool,
-    is_send: bool,
-    #[skip]
-    __: bool,
-    opcode: B5,
-}
-
-#[repr(u8)]
-#[derive(Debug, FromRepr)]
-enum Syndrome {
-    LocalLengthError = 0x01,
-    LocalQpOperationError = 0x02,
-    LocalProtError = 0x04,
-    WrFlushError = 0x05,
-    MwBindError = 0x06,
-    BadResponseError = 0x10,
-    LocalAccessError = 0x11,
-    RemoteInvalidRequestError = 0x12,
-    RemoteAccessError = 0x13,
-    RemoteOperationError = 0x14,
-    TransportRetryExceededError = 0x15,
-    RnrRetryExceededError = 0x16,
-    RemoteAbortedErr = 0x22,
-}
-
-#[repr(u32)]
-#[derive(FromRepr)]
-enum ReceiveOpcode {
-    RdmaWriteImm = 0x0,
-    Send = 0x1,
-    SendImm = 0x2,
-    SendInval = 0x3,
-}

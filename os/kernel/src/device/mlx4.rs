@@ -38,6 +38,46 @@ use profile::Profile;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering::Relaxed;
 
+use crate::memory::PAGE_SIZE;
+use uuid::Uuid;
+use x86_64::{PhysAddr, VirtAddr};
+
+/// Physical memory regions backing a queue pair's kernel-bypass fast path,
+/// as resolved by [`ConnectX3Nic::mmap_qp_resources`].
+pub struct QpMmapResources {
+    /// (start address, byte length) of the combined SQ+RQ ring buffer.
+    pub ring_buf: (PhysAddr, usize),
+    /// Per-QP doorbell record (DMA host memory, cacheable).
+    pub qp_doorbell: PhysAddr,
+    /// UAR doorbell MMIO page for this QP (uncacheable).
+    pub uar_doorbell: PhysAddr,
+    /// (start address, byte length) of the BlueFlame MMIO page for this QP,
+    /// if the HCA supports it.
+    pub bf: Option<(PhysAddr, usize)>,
+    pub bf_reg_size: u32,
+    pub sq_offset: u32,
+    pub sq_wqe_cnt: u32,
+    pub sq_wqe_shift: u32,
+    pub sq_spare_wqes: u32,
+    pub sq_max_gs: u32,
+    pub sq_max_post: u32,
+    pub rq_offset: u32,
+    pub rq_wqe_cnt: u32,
+    pub rq_wqe_shift: u32,
+    pub rq_max_gs: u32,
+    pub rq_max_post: u32,
+}
+
+/// Physical memory regions backing a completion queue's kernel-bypass fast
+/// path, as resolved by [`ConnectX3Nic::mmap_cq_resources`].
+pub struct CqMmapResources {
+    /// (start address, byte length) of the CQE ring buffer.
+    pub ring_buf: (PhysAddr, usize),
+    /// Per-CQ doorbell record (DMA host memory, cacheable).
+    pub cq_doorbell: PhysAddr,
+    pub num_entries: u32,
+}
+
 /// Vendor ID for Mellanox
 pub const MLX_VEND: u16 = 0x15b3;
 /// Device ID for the ConnectX-3 NIC
@@ -322,6 +362,62 @@ impl ConnectX3Nic {
         let qp = self.qps.iter_mut().find(|qp| qp.number() == qp_number).ok_or("invalid queue pair number")?;
         // TODO: check if blue flame is available
         qp.post_send(&mut self.capabilities, &mut self.doorbells, Some(&mut self.blueflame), wr)
+    }
+
+    /// Resolve the physical memory regions backing `qp_number`'s ring
+    /// buffer, doorbell record and UAR doorbell/BlueFlame page(s), for the
+    /// `UVERBS_CMD_MMAP_QP` syscall handler to map into the calling
+    /// process. Refuses to resolve a QP created by a different process.
+    pub fn mmap_qp_resources(&mut self, qp_number: u32, caller: Uuid) -> Result<QpMmapResources, &'static str> {
+        let qp = self.qps.iter().find(|qp| qp.number() == qp_number).ok_or("invalid queue pair number")?;
+        if qp.creator() != caller {
+            return Err("queue pair belongs to a different process");
+        }
+        let uar_idx = qp.uar_idx();
+        let uar_doorbell = utils::get_physical_address(VirtAddr::new(self.doorbells[uar_idx].into_range().start.start_address().as_u64()));
+        let bf = if self.capabilities.bf() {
+            let page = &self.blueflame[uar_idx];
+            let addr = utils::get_physical_address(VirtAddr::new(page.into_range().start.start_address().as_u64()));
+            Some((addr, page.into_range().len() as usize * PAGE_SIZE))
+        } else {
+            None
+        };
+        let (sq_offset, sq_wqe_cnt, sq_wqe_shift, sq_spare_wqes, sq_max_gs, sq_max_post) = qp.sq_geometry();
+        let (rq_offset, rq_wqe_cnt, rq_wqe_shift, rq_max_gs, rq_max_post) = qp.rq_geometry();
+        Ok(QpMmapResources {
+            ring_buf: qp.ring_buffer_region(),
+            qp_doorbell: qp.doorbell_phys_addr(),
+            uar_doorbell,
+            bf,
+            bf_reg_size: self.capabilities.bf_reg_size() as u32,
+            sq_offset,
+            sq_wqe_cnt,
+            sq_wqe_shift,
+            sq_spare_wqes,
+            sq_max_gs,
+            sq_max_post,
+            rq_offset,
+            rq_wqe_cnt,
+            rq_wqe_shift,
+            rq_max_gs,
+            rq_max_post,
+        })
+    }
+
+    /// Resolve the physical memory regions backing `cq_number`'s CQE ring
+    /// buffer and doorbell record, for the `UVERBS_CMD_MMAP_CQ` syscall
+    /// handler to map into the calling process. Refuses to resolve a CQ
+    /// created by a different process.
+    pub fn mmap_cq_resources(&mut self, cq_number: u32, caller: Uuid) -> Result<CqMmapResources, &'static str> {
+        let cq = self.cqs.iter().find(|cq| cq.number() == cq_number).ok_or("invalid completion queue number")?;
+        if cq.creator() != caller {
+            return Err("completion queue belongs to a different process");
+        }
+        Ok(CqMmapResources {
+            ring_buf: cq.ring_buffer_region(),
+            cq_doorbell: cq.doorbell_phys_addr(),
+            num_entries: cq.entry_count(),
+        })
     }
 
     /// Create a memory region and return its index, physical address, lkey and rkey.
