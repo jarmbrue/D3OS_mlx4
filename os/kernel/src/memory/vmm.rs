@@ -392,6 +392,20 @@ impl VirtualAddressSpace {
         vmas.insert(start_address, Arc::new(v_area));
     }
 
+    /// Validate that the byte range `[addr, addr + len)` lies entirely
+    /// within this process's user address space. This is a bounds check
+    /// only - it does *not* verify the pages are actually mapped (unlike
+    /// `copy_to_user`/`copy_from_user`, which additionally call
+    /// `ensure_user_page_is_mapped` per page). Exposed for callers like
+    /// `UVERBS_CMD_REGISTER_MR` whose destination buffer is DMA'd in place
+    /// rather than copied into a kernel buffer, so the usual
+    /// `copy_from_user` helper doesn't apply, but the pointer/length still
+    /// needs the same "does this even point into user space" validation
+    /// `access_ok` already provides.
+    pub fn is_user_range_ok(&self, addr: VirtAddr, len: usize) -> bool {
+        self.access_ok(addr, len)
+    }
+
     fn access_ok(&self, addr: VirtAddr, len: usize) -> bool {
         if len == 0 {
             return false;
