@@ -79,6 +79,15 @@ pub struct CqMmapResources {
     pub num_entries: u32,
 }
 
+/// Sentinel error returned by the QP/CQ verb handlers below (`modify_qp`,
+/// `post_send`, `post_receive`, `destroy_qp`, `poll_cq`, `destroy_cq`) when
+/// the calling process does not own the resource it is trying to touch.
+/// Matched by string equality at the `uverbs.rs` boundary (`uverbs.rs`'s
+/// `map_uverbs_err`) to distinguish "not your QP/CQ" (`Errno::EACCES`) from
+/// every other driver error (`Errno::EINVAL`), without introducing a typed
+/// error enum for what is otherwise a `&'static str`-error driver.
+pub(crate) const ERR_NOT_OWNER: &str = "permission denied: caller does not own this resource";
+
 /// Vendor ID for Mellanox
 pub const MLX_VEND: u16 = 0x15b3;
 /// Device ID for the ConnectX-3 NIC
@@ -277,41 +286,65 @@ impl ConnectX3Nic {
 
     /// Poll a completion queue and return the number of new completions.
     ///
-    /// This is used by ibv_poll_cq.
-    pub fn poll_cq(&mut self, number: u32, wc: &mut [ibv_wc]) -> Result<usize, &'static str> {
+    /// This is used by ibv_poll_cq. Refuses to poll a CQ created by a
+    /// different process (`ERR_NOT_OWNER`) - this is also the check
+    /// extension 1's eventual blocking `poll_cq` design gates
+    /// "may this caller block-wait on this CQ" on, so keep it as the single,
+    /// obviously-reusable choke point.
+    pub fn poll_cq(&mut self, number: u32, caller: Uuid, wc: &mut [ibv_wc]) -> Result<usize, &'static str> {
         let cq = self.cqs.iter_mut().find(|cq| cq.number() == number).ok_or("invalid completion queue number")?;
+        if cq.creator() != caller {
+            return Err(ERR_NOT_OWNER);
+        }
         cq.poll(&mut self.eqs, &mut self.qps, &mut self.doorbells, wc)
     }
 
-    /// Destroy a completion queue.
-    pub fn destroy_cq(&mut self, number: u32) -> Result<(), &'static str> {
-        let (index, _) = self
+    /// Destroy a completion queue. Refuses to destroy a CQ created by a
+    /// different process (`ERR_NOT_OWNER`).
+    pub fn destroy_cq(&mut self, number: u32, caller: Uuid) -> Result<(), &'static str> {
+        let (index, cq) = self
             .cqs
             .iter()
             .enumerate()
             .find(|(_, cq)| cq.number() == number)
             .ok_or("completion queue not found")?;
+        if cq.creator() != caller {
+            return Err(ERR_NOT_OWNER);
+        }
         let cq = self.cqs.remove(index);
         cq.destroy(&mut self.cmd)?;
         Ok(())
     }
 
-    /// Create a queue pair and return its number.
+    /// Create a queue pair and return its number. Refuses to bind the new
+    /// QP to a send/receive CQ created by a different process
+    /// (`ERR_NOT_OWNER`) - without this, `post_send`/`post_receive`'s
+    /// per-QP ownership check wouldn't be enough on its own, since a
+    /// process could still create a QP that delivers completions into a
+    /// CQ it doesn't own (readable via that other process's `poll_cq`,
+    /// itself ownership-checked, but the *binding* is what needs to be
+    /// prevented here).
     ///
     /// This is used by ibv_create_qp.
     pub fn create_qp(
-        &mut self, qp_type: ibv_qp_type::Type, send_cq_number: u32, receive_cq_number: u32, ib_caps: &mut ibv_qp_cap,
+        &mut self, qp_type: ibv_qp_type::Type, caller: Uuid, send_cq_number: u32, receive_cq_number: u32, ib_caps: &mut ibv_qp_cap,
     ) -> Result<u32, &'static str> {
         let send_cq = self
             .cqs
             .iter()
             .find(|cq| cq.number() == send_cq_number)
             .ok_or("invalid send completion queue number")?;
+        if send_cq.creator() != caller {
+            return Err(ERR_NOT_OWNER);
+        }
         let receive_cq = self
             .cqs
             .iter()
             .find(|cq| cq.number() == receive_cq_number)
             .ok_or("invalid receive completion queue number")?;
+        if receive_cq.creator() != caller {
+            return Err(ERR_NOT_OWNER);
+        }
         let qp = QueuePair::new(
             &mut self.cmd,
             &mut self.capabilities,
@@ -329,20 +362,28 @@ impl ConnectX3Nic {
 
     /// Modify a queue pair.
     ///
-    /// This is used by ibv_modify_qp.
-    pub fn modify_qp(&mut self, number: u32, attr: &ibv_qp_attr, attr_mask: ibv_qp_attr_mask) -> Result<(), &'static str> {
+    /// This is used by ibv_modify_qp. Refuses to modify a QP created by a
+    /// different process (`ERR_NOT_OWNER`).
+    pub fn modify_qp(&mut self, number: u32, caller: Uuid, attr: &ibv_qp_attr, attr_mask: ibv_qp_attr_mask) -> Result<(), &'static str> {
         let qp = self.qps.iter_mut().find(|qp| qp.number() == number).ok_or("invalid queue pair number")?;
+        if qp.creator() != caller {
+            return Err(ERR_NOT_OWNER);
+        }
         qp.modify(&mut self.cmd, &mut self.capabilities, attr, attr_mask)
     }
 
-    /// Destroy a queue pair.
-    pub fn destroy_qp(&mut self, number: u32) -> Result<(), &'static str> {
-        let (index, _) = self
+    /// Destroy a queue pair. Refuses to destroy a QP created by a different
+    /// process (`ERR_NOT_OWNER`).
+    pub fn destroy_qp(&mut self, number: u32, caller: Uuid) -> Result<(), &'static str> {
+        let (index, qp) = self
             .qps
             .iter()
             .enumerate()
             .find(|(_, qp)| qp.number() == number)
             .ok_or("queue pair not found")?;
+        if qp.creator() != caller {
+            return Err(ERR_NOT_OWNER);
+        }
         let qp = self.qps.remove(index);
         qp.destroy(&mut self.cmd, &mut self.capabilities)?;
         Ok(())
@@ -350,17 +391,25 @@ impl ConnectX3Nic {
 
     /// Post a work request to receive data.
     ///
-    /// This is used by ibv_post_recv.
-    pub fn post_receive(&mut self, qp_number: u32, wr: &ibv_recv_wr_uapi) -> Result<(), &'static str> {
+    /// This is used by ibv_post_recv. Refuses to post to a QP created by a
+    /// different process (`ERR_NOT_OWNER`).
+    pub fn post_receive(&mut self, qp_number: u32, caller: Uuid, wr: &ibv_recv_wr_uapi) -> Result<(), &'static str> {
         let qp = self.qps.iter_mut().find(|qp| qp.number() == qp_number).ok_or("invalid queue pair number")?;
+        if qp.creator() != caller {
+            return Err(ERR_NOT_OWNER);
+        }
         qp.post_receive(wr)
     }
 
     /// Post a work request to send data.
     ///
-    /// This is used by ibv_post_send.
-    pub fn post_send(&mut self, qp_number: u32, wr: &ibv_send_wr_uapi) -> Result<(), &'static str> {
+    /// This is used by ibv_post_send. Refuses to post to a QP created by a
+    /// different process (`ERR_NOT_OWNER`).
+    pub fn post_send(&mut self, qp_number: u32, caller: Uuid, wr: &ibv_send_wr_uapi) -> Result<(), &'static str> {
         let qp = self.qps.iter_mut().find(|qp| qp.number() == qp_number).ok_or("invalid queue pair number")?;
+        if qp.creator() != caller {
+            return Err(ERR_NOT_OWNER);
+        }
         // TODO: check if blue flame is available
         qp.post_send(&mut self.capabilities, &mut self.doorbells, Some(&mut self.blueflame), wr)
     }
