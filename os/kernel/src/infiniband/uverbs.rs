@@ -194,7 +194,7 @@ pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
 
             let mut __kernel_wc_buf = vec![ibv_wc::default(); supported_len];
 
-            let wc_count = uverbs_poll_cq(minor, __kernel_cq_poll_container.cq_num, &mut __kernel_wc_buf[..]).map_err(|_| Errno::EINVAL)?;
+            let wc_count = uverbs_poll_cq(minor, process.id(), __kernel_cq_poll_container.cq_num, &mut __kernel_wc_buf[..]).map_err(map_uverbs_err)?;
 
             // Previously a raw copy_nonoverlapping straight into the
             // unvalidated `wc` user pointer - now goes through
@@ -266,8 +266,9 @@ pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
         }
         UVERBS_CMD_DESTROY_CQ => {
             let cq_num = arg as u32;
+            let caller = process.id();
 
-            let _ = uverbs_destroy(minor, |dev| dev.destroy_cq(cq_num)).map_err(|_| Errno::EINVAL)?;
+            let _ = uverbs_destroy(minor, |dev| dev.destroy_cq(cq_num, caller)).map_err(map_uverbs_err)?;
 
             Ok(0)
         }
