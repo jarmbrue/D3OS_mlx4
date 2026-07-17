@@ -316,22 +316,35 @@ impl ConnectX3Nic {
         Ok(())
     }
 
-    /// Create a queue pair and return its number.
+    /// Create a queue pair and return its number. Refuses to bind the new
+    /// QP to a send/receive CQ created by a different process
+    /// (`ERR_NOT_OWNER`) - without this, `post_send`/`post_receive`'s
+    /// per-QP ownership check wouldn't be enough on its own, since a
+    /// process could still create a QP that delivers completions into a
+    /// CQ it doesn't own (readable via that other process's `poll_cq`,
+    /// itself ownership-checked, but the *binding* is what needs to be
+    /// prevented here).
     ///
     /// This is used by ibv_create_qp.
     pub fn create_qp(
-        &mut self, qp_type: ibv_qp_type::Type, send_cq_number: u32, receive_cq_number: u32, ib_caps: &mut ibv_qp_cap,
+        &mut self, qp_type: ibv_qp_type::Type, caller: Uuid, send_cq_number: u32, receive_cq_number: u32, ib_caps: &mut ibv_qp_cap,
     ) -> Result<u32, &'static str> {
         let send_cq = self
             .cqs
             .iter()
             .find(|cq| cq.number() == send_cq_number)
             .ok_or("invalid send completion queue number")?;
+        if send_cq.creator() != caller {
+            return Err(ERR_NOT_OWNER);
+        }
         let receive_cq = self
             .cqs
             .iter()
             .find(|cq| cq.number() == receive_cq_number)
             .ok_or("invalid receive completion queue number")?;
+        if receive_cq.creator() != caller {
+            return Err(ERR_NOT_OWNER);
+        }
         let qp = QueuePair::new(
             &mut self.cmd,
             &mut self.capabilities,

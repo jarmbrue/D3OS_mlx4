@@ -49,10 +49,10 @@ pub fn uverbs_create_cq<'cq>(minor: usize, cq_container: &'cq mut ibv_cq_contain
     Ok(&cq_container.cq_num)
 }
 
-pub fn uverbs_create_qp<'qp>(minor: usize, qp_container: &'qp mut ibv_qp_container) -> Result<&'qp u32, &'static str> {
+pub fn uverbs_create_qp<'qp>(minor: usize, caller: Uuid, qp_container: &'qp mut ibv_qp_container) -> Result<&'qp u32, &'static str> {
     let number = get_dev_list().lock()
         .get_mut(minor_to_idx(minor)).unwrap()
-        .create_qp(qp_container.qp_type, qp_container.send_cq_num, qp_container.recv_cq_num, &mut qp_container.ib_caps)?;
+        .create_qp(qp_container.qp_type, caller, qp_container.send_cq_num, qp_container.recv_cq_num, &mut qp_container.ib_caps)?;
 
     qp_container.qp_num = number;
     Ok(&qp_container.qp_num)

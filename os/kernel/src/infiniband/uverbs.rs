@@ -154,7 +154,7 @@ pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
             // the single copy_from_user above already pulled it in, and
             // `uverbs_create_qp` mutates `__kernel_qp_container.ib_caps`
             // directly.
-            uverbs_create_qp(minor, &mut __kernel_qp_container).map_err(|_| Errno::EINVAL)?;
+            uverbs_create_qp(minor, process.id(), &mut __kernel_qp_container).map_err(map_uverbs_err)?;
 
             process.virtual_address_space.copy_to_user(__user_buf, &[__kernel_qp_container]).map_err(|_| Errno::EINVAL)?;
             Ok(0)
