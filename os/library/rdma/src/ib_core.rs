@@ -69,7 +69,7 @@ pub enum ibv_mtu {
     Mtu4096 = 5,
 }
 
-#[derive(Debug, Default, PartialEq, Eq, FromRepr)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, FromRepr)]
 #[repr(i32)]
 pub enum ibv_port_state {
     #[default]
@@ -81,7 +81,7 @@ pub enum ibv_port_state {
     IBV_PORT_ACTIVE_DEFER = 5,
 }
 
-#[derive(Debug, Default, FromRepr)]
+#[derive(Debug, Default, Clone, Copy, FromRepr)]
 #[repr(u8)]
 pub enum PhysicalPortState {
     #[default]
@@ -100,13 +100,13 @@ pub struct ibv_gid {
     pub raw: [u8; 16],
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct ibv_global_route {
     pub dgid: ibv_gid,
     pub hop_limit: u8,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct ibv_ah_attr {
     pub grh: ibv_global_route,
     pub dlid: u16,
@@ -116,7 +116,7 @@ pub struct ibv_ah_attr {
     pub port_num: u8,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct ibv_qp_attr {
     pub qp_state: ibv_qp_state,
     pub path_mtu: ibv_mtu,
@@ -142,6 +142,7 @@ pub struct ibv_qp_attr {
 
 
 bitflags! {
+    #[derive(Default, Clone, Copy)]
     pub struct ibv_qp_attr_mask: u32 {
         const IBV_QP_STATE = 1;
         const IBV_QP_ACCESS_FLAGS = 8;
@@ -163,7 +164,7 @@ bitflags! {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct ibv_port_attr {
     pub state: ibv_port_state,
     pub max_mtu: ibv_mtu,
@@ -200,7 +201,7 @@ pub struct ibv_send_wr {
     pub __bindgen_anon_2: (),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ibv_send_wr_wr {
     rdma {
         /// Start address of remote memory buffer
@@ -233,7 +234,7 @@ impl Default for ibv_send_wr_wr {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct ibv_send_wr_wr_ah {
     pub port: u32,
     pub dlid: u16,
@@ -265,7 +266,7 @@ bitflags! {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct ibv_sge {
     pub addr: u64,
     pub length: u32,
