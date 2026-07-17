@@ -16,7 +16,12 @@ syscall = { path = "../../library/syscall" }
 # external depencies
 bincode = { version = "2.0.1", optional = true, default-features = false, features = ["derive", "alloc"] }
 core3 = { version = "0.1", default-features = false }
+tock-registers = "0.10.1"
 
 [features]
-default = ["serialize"]
+default = ["serialize", "fastpath-verbs"]
 serialize = ["dep:bincode"]
+# Zero-syscall post_send/post_recv/poll_cq (kernel-bypass fast path).
+# Disable (build with --no-default-features) to fall back to the original
+# syscall-based ibv_poll_cq/ibv_post_send/ibv_post_recv.
+fastpath-verbs = []
