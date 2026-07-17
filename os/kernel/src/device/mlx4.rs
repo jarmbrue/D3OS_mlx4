@@ -23,7 +23,8 @@ use icm::MappedIcmTables;
 use log::trace;
 use pci_types::{CommandRegister, EndpointHeader};
 
-use rdma::{ibv_access_flags, ibv_device_attr, ibv_port_attr, ibv_qp_attr, ibv_qp_attr_mask, ibv_qp_cap, ibv_qp_type, ibv_recv_wr, ibv_send_wr, ibv_wc};
+use rdma::{ibv_access_flags, ibv_device_attr, ibv_port_attr, ibv_qp_attr, ibv_qp_attr_mask, ibv_qp_cap, ibv_qp_type, ibv_wc};
+use rdma::uverbs_uapi::{ibv_recv_wr_uapi, ibv_send_wr_uapi};
 
 use crate::pci_bus;
 use port::Port;
@@ -350,7 +351,7 @@ impl ConnectX3Nic {
     /// Post a work request to receive data.
     ///
     /// This is used by ibv_post_recv.
-    pub fn post_receive(&mut self, qp_number: u32, wr: &mut ibv_recv_wr) -> Result<(), &'static str> {
+    pub fn post_receive(&mut self, qp_number: u32, wr: &ibv_recv_wr_uapi) -> Result<(), &'static str> {
         let qp = self.qps.iter_mut().find(|qp| qp.number() == qp_number).ok_or("invalid queue pair number")?;
         qp.post_receive(wr)
     }
@@ -358,7 +359,7 @@ impl ConnectX3Nic {
     /// Post a work request to send data.
     ///
     /// This is used by ibv_post_send.
-    pub fn post_send(&mut self, qp_number: u32, wr: &mut ibv_send_wr) -> Result<(), &'static str> {
+    pub fn post_send(&mut self, qp_number: u32, wr: &ibv_send_wr_uapi) -> Result<(), &'static str> {
         let qp = self.qps.iter_mut().find(|qp| qp.number() == qp_number).ok_or("invalid queue pair number")?;
         // TODO: check if blue flame is available
         qp.post_send(&mut self.capabilities, &mut self.doorbells, Some(&mut self.blueflame), wr)
