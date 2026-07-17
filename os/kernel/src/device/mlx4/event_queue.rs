@@ -16,13 +16,14 @@ use modular_bitfield_msb::{
     bitfield,
     specifiers::{B10, B16, B2, B22, B24, B4, B40, B5, B6, B60, B7, B72, B96},
 };
+use rdma::mlx4_hw::DoorbellPage;
 use strum_macros::FromRepr;
 use tock_registers::interfaces::Writeable;
 
 use super::{
     cmd::{CommandInterface, Opcode},
     device::PAGE_SHIFT,
-    fw::{Capabilities, DoorbellPage},
+    fw::Capabilities,
     icm::{MrTable, ICM_PAGE_SHIFT},
     Offsets,
 };

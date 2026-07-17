@@ -9,6 +9,7 @@ use core::{
 
 use crate::device::mlx4::utils::FillOperation;
 use crate::memory::PAGE_SIZE;
+use crate::process_manager;
 use alloc::boxed::Box;
 use alloc::{vec, vec::Vec};
 use alloc::string::ToString;
@@ -21,18 +22,21 @@ use modular_bitfield_msb::{
 };
 use rdma::{
     ibv_access_flags, ibv_mtu, ibv_qp_attr, ibv_qp_attr_mask, ibv_qp_cap, ibv_qp_state, ibv_qp_type, ibv_recv_wr, ibv_send_flags, ibv_send_wr, ibv_send_wr_wr,
-    ibv_sge, ibv_wr_opcode,
+    ibv_wr_opcode,
 };
-use strum_macros::FromRepr;
-use tock_registers::{interfaces::Writeable, registers::WriteOnly};
+use rdma::mlx4_hw::{
+    DoorbellPage, QueuePairDoorbell, QueuePairOpcode, WqeControlSegment, WqeControlSegmentFlags, WqeDataSegment, WqeRemoteAddressSegment,
+};
+use tock_registers::interfaces::Writeable;
+use uuid::Uuid;
 use x86_64::{PhysAddr, VirtAddr};
-use zerocopy::{AsBytes, FromBytes, U16, U32, U64};
+use zerocopy::{AsBytes, FromBytes, U16, U32};
 
 use super::{
     cmd::{CommandInterface, Opcode},
     completion_queue::CompletionQueue,
     device::{uar_index_to_hw, PAGE_SHIFT},
-    fw::{Capabilities, DoorbellPage},
+    fw::Capabilities,
     icm::{MrTable, ICM_PAGE_SHIFT},
     utils,
     utils::{MappedPages, OperationArgs, Operations},
@@ -65,6 +69,9 @@ pub(super) struct QueuePair {
     doorbell_page: MappedPages,
     doorbell_address: PhysAddr,
     mtt: u64,
+    /// Process that created this queue pair. Used to reject cross-process
+    /// mmap requests for this QP's ring buffer / doorbell / UAR pages.
+    creator: Uuid,
 }
 
 impl QueuePair {
@@ -106,6 +113,7 @@ impl QueuePair {
             utils::create_cont_mapping_with_dma_flags(utils::pages_required(size_of::<QueuePairDoorbell>()))?.fetch_in_addr()?;
         let doorbell: &mut QueuePairDoorbell = doorbell_page.as_type_mut(0)?;
         doorbell.receive_wqe_index.set(0_u32.to_be());
+        let creator = process_manager().read().current_process().id();
         let qp = Self {
             number,
             state,
@@ -121,6 +129,7 @@ impl QueuePair {
             doorbell_page,
             doorbell_address,
             mtt,
+            creator,
         };
         trace!("created new QP: {qp:?}");
         Ok(qp)
@@ -453,13 +462,14 @@ impl QueuePair {
             }
             let mut sge_index = 0;
             for sge in &curr.sg_list {
+                let phys_addr = utils::get_physical_address(VirtAddr::new(sge.addr)).as_u64();
                 let elem: &mut WqeDataSegment = self.rq.get_element(self.memory.as_mut().unwrap(), index + sge_index)?;
-                elem.copy_from_sge(sge)?;
+                elem.set(sge, phys_addr);
                 sge_index += 1;
             }
 
             // write wr id, so that cp can recover it
-            self.sq.update_id(index as usize, curr.wr_id);
+            self.rq.update_id(index as usize, curr.wr_id);
 
             // fill the last one
             let last_elem: &mut WqeDataSegment = self.rq.get_element(self.memory.as_mut().unwrap(), index + sge_index)?;
@@ -551,8 +561,9 @@ impl QueuePair {
             // with WQE prefetching.
             wqe_offset += (usize::try_from(curr.num_sge).unwrap() - 1) * size_of::<WqeDataSegment>();
             for sge in curr.sg_list.iter().rev() {
+                let phys_addr = utils::get_physical_address(VirtAddr::new(sge.addr)).as_u64();
                 let elem: &mut WqeDataSegment = memory.0.as_type_mut(wqe_offset)?;
-                elem.copy_from_sge(sge)?;
+                elem.set(sge, phys_addr);
                 wqe_offset -= size_of::<WqeDataSegment>();
                 wqe_size += size_of::<WqeDataSegment>();
             }
@@ -696,6 +707,39 @@ impl QueuePair {
     pub(super) fn number(&self) -> u32 {
         self.number
     }
+
+    /// Get the process that created this queue pair.
+    pub(super) fn creator(&self) -> Uuid {
+        self.creator
+    }
+
+    /// Physical start address and byte length of this QP's combined SQ+RQ
+    /// ring buffer. Used to mmap it into the owning process.
+    pub(super) fn ring_buffer_region(&self) -> (PhysAddr, usize) {
+        let memory = self.memory.as_ref().unwrap();
+        (memory.1, memory.0.into_range().len() as usize * PAGE_SIZE)
+    }
+
+    /// Physical address of this QP's doorbell-record page (DMA host memory,
+    /// not MMIO).
+    pub(super) fn doorbell_phys_addr(&self) -> PhysAddr {
+        self.doorbell_address
+    }
+
+    /// Index into the NIC's UAR doorbell/BlueFlame page vectors for this QP.
+    pub(super) fn uar_idx(&self) -> usize {
+        self.uar_idx
+    }
+
+    /// Send-queue geometry: (offset, wqe_cnt, wqe_shift, spare_wqes, max_gs, max_post).
+    pub(super) fn sq_geometry(&self) -> (u32, u32, u32, u32, u32, u32) {
+        (self.sq.offset, self.sq.wqe_cnt, self.sq.wqe_shift, self.sq.spare_wqes.unwrap(), self.sq.max_gs, self.sq.max_post)
+    }
+
+    /// Receive-queue geometry: (offset, wqe_cnt, wqe_shift, max_gs, max_post).
+    pub(super) fn rq_geometry(&self) -> (u32, u32, u32, u32, u32) {
+        (self.rq.offset, self.rq.wqe_cnt, self.rq.wqe_shift, self.rq.max_gs, self.rq.max_post)
+    }
 }
 
 impl Drop for QueuePair {
@@ -704,11 +748,6 @@ impl Drop for QueuePair {
             panic!("please destroy instead of dropping")
         }
     }
-}
-
-#[repr(transparent)]
-struct QueuePairDoorbell {
-    receive_wqe_index: WriteOnly<u32>,
 }
 
 type WorkQueueMeta<U, T> = (U, T);
@@ -897,91 +936,6 @@ fn send_wqe_overhead(qp_type: ibv_qp_type::Type) -> u32 {
     .unwrap()
 }
 
-#[derive(FromBytes)]
-#[repr(C)]
-struct WqeControlSegment {
-    owner_opcode: U32<BigEndian>,
-    vlan_cv_f_ds: U32<BigEndian>,
-    flags: U32<BigEndian>,
-    flags2: U32<BigEndian>,
-}
-
-impl WqeControlSegment {
-    fn size(&self) -> u32 {
-        (self.vlan_cv_f_ds.get() & 0x3f) << 4
-    }
-}
-
-bitflags! {
-    struct WqeControlSegmentFlags: u32 {
-        const NEC = 1 << 29;
-        const IIP = 1 << 28;
-        const ILP = 1 << 27;
-        const FENCE = 1 << 6;
-        const CQ_UPDATE = 3 << 2;
-        const SOLICITED = 1 << 1;
-        const IP_CSUM = 1 << 4;
-        const TCP_UDP_CSUM = 1 << 5;
-        const INS_CVLAN = 1 << 6;
-        const INS_SVLAN = 1 << 7;
-        const STRONG_ORDER = 1 << 7;
-        const FORCE_LOOPBACK = 1 << 0;
-    }
-}
-
-impl From<ibv_send_flags> for WqeControlSegmentFlags {
-    fn from(flags: ibv_send_flags) -> Self {
-        let mut out = WqeControlSegmentFlags::empty();
-
-        if flags.contains(ibv_send_flags::FENCE) {
-            out |= WqeControlSegmentFlags::FENCE;
-        }
-        if flags.contains(ibv_send_flags::SOLICITED) {
-            out |= WqeControlSegmentFlags::SOLICITED;
-        }
-        // CQ update for signaled WRs
-        if flags.contains(ibv_send_flags::SIGNALED) {
-            out |= WqeControlSegmentFlags::CQ_UPDATE;
-        }
-        out
-    }
-}
-
-#[derive(FromBytes)]
-#[repr(C)]
-struct WqeDataSegment {
-    byte_count: U32<BigEndian>,
-    lkey: U32<BigEndian>,
-    addr: U64<BigEndian>,
-}
-
-impl WqeDataSegment {
-    /// Copy information from an sge.
-    fn copy_from_sge(&mut self, sge: &ibv_sge) -> Result<(), &'static str> {
-        self.lkey.set(sge.lkey);
-        self.addr.set(utils::get_physical_address(VirtAddr::new(sge.addr)).as_u64());
-        // sending needs a barrier here before writing the byte_count
-        // field to make sure that all the data is visible before the
-        // byte_count field is set. Otherwise, if the segment begins a new
-        // cacheline, the HCA prefetcher could grab the 64-byte chunk and
-        // get a valid (!= * 0xffffffff) byte count but stale data, and end
-        // up sending the wrong data.
-        compiler_fence(Ordering::SeqCst);
-        self.byte_count.set(sge.length);
-        Ok(())
-    }
-
-    /// Create a dummy element to be the last in the queue.
-    fn last() -> WqeDataSegment {
-        const INVALID_LKEY: u32 = 0x100;
-        Self {
-            byte_count: 0.into(),
-            lkey: INVALID_LKEY.into(),
-            addr: 0.into(),
-        }
-    }
-}
-
 const ETH_ALEN: usize = 6;
 
 #[derive(FromBytes)]
@@ -1035,29 +989,6 @@ struct WqeDatagramSegmentAv {
     hop_limit: u8,
     sl_tclass_flowlabel: u32,
     dgid: [u32; 4],
-}
-
-#[derive(FromBytes)]
-#[repr(C)]
-struct WqeRemoteAddressSegment {
-    va: U64<BigEndian>,
-    key: U32<BigEndian>,
-    rsvd: u32,
-}
-
-impl WqeRemoteAddressSegment {
-    /// Create a remote address segment from a wr wr.
-    fn from_wr(wr: &ibv_send_wr_wr) -> Result<Self, &'static str> {
-        if let ibv_send_wr_wr::rdma { remote_addr, rkey } = wr {
-            Ok(Self {
-                va: (*remote_addr).into(),
-                key: (*rkey).into(),
-                rsvd: 0,
-            })
-        } else {
-            Err("invalid wr field")
-        }
-    }
 }
 
 #[bitfield]
@@ -1325,23 +1256,3 @@ bitflags! {
     }
 }
 
-#[repr(u32)]
-#[derive(FromRepr)]
-pub(super) enum QueuePairOpcode {
-    Nop = 0x00,
-    SendInval = 0x01,
-    RdmaWrite = 0x08,
-    RdmaWriteImm = 0x09,
-    Send = 0x0a,
-    SendImm = 0x0b,
-    Lso = 0x0e,
-    RdmaRead = 0x10,
-    AtomicCs = 0x11,
-    AtomicFa = 0x12,
-    MaskedAtomicCs = 0x14,
-    MaskedAtomicFa = 0x15,
-    BindMw = 0x18,
-    Fmr = 0x19,
-    LocalInval = 0x1b,
-    ConfigCmd = 0x1f,
-}

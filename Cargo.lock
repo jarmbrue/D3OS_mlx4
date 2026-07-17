@@ -697,6 +697,7 @@ dependencies = [
  "mm",
  "rdma",
  "syscall",
+ "tock-registers",
 ]
 
 [[package]]
@@ -1600,8 +1601,12 @@ name = "rdma"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
+ "byteorder",
+ "modular-bitfield-msb",
  "num_enum 0.5.11",
  "strum_macros",
+ "tock-registers",
+ "zerocopy 0.5.2",
 ]
 
 [[package]]
