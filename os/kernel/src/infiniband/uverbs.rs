@@ -1,5 +1,5 @@
 use super::uverbs_cmd::*;
-use crate::device::mlx4::{device_in_range, ConnectX3Nic};
+use crate::device::mlx4::{device_in_range, ERR_NOT_OWNER};
 use crate::process_manager;
 use alloc::vec;
 use core::slice::{from_mut, from_raw_parts_mut};
@@ -30,6 +30,26 @@ static UVERBS_SUPPORTED_MINOR_TABLE: &[usize] = &[
     UVERBS_CMD_MMAP_QP,
     UVERBS_CMD_MMAP_CQ,
 ];
+
+/// Map a driver-level `&'static str` error to a syscall errno. Ownership
+/// failures - identified via the `ERR_NOT_OWNER` sentinel returned by
+/// `ConnectX3Nic`'s QP/CQ methods (`modify_qp`/`post_send`/`post_receive`/
+/// `destroy_qp`/`poll_cq`/`destroy_cq`) - surface as `Errno::EACCES` so
+/// userspace can distinguish "not your QP/CQ" from a malformed request;
+/// every other driver error keeps mapping to the pre-existing blanket
+/// `Errno::EINVAL`. A sentinel-string match was chosen over a small typed
+/// driver error because the driver already communicates exclusively via
+/// `&'static str` (including the pre-existing, unrelated ownership strings
+/// in `mmap_qp_resources`/`mmap_cq_resources`) - introducing a typed error
+/// just for this one distinction would touch every driver method's return
+/// type for no benefit beyond this single call boundary.
+fn map_uverbs_err(err: &'static str) -> Errno {
+    if err == ERR_NOT_OWNER {
+        Errno::EACCES
+    } else {
+        Errno::EINVAL
+    }
+}
 
 pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
     // `size` (the cmd-encoded container size) no longer needs to be read out
@@ -150,7 +170,7 @@ pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
             // `attr: ibv_qp_attr` embedded by value (`ibv_qp_attr` is POD -
             // scalars/enums plus POD `ibv_ah_attr` -> `ibv_global_route` ->
             // `ibv_gid`), pulled in by the single copy_from_user above.
-            uverbs_modify_qp(minor, __kernel_qp_modify_container).map_err(|_| Errno::EINVAL)?;
+            uverbs_modify_qp(minor, process.id(), __kernel_qp_modify_container).map_err(map_uverbs_err)?;
 
             Ok(0)
         }
@@ -205,7 +225,7 @@ pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
             // the fixed array length, and vs. the QP's negotiated
             // `max_send_sge`) are checked in
             // `os/kernel/src/device/mlx4/queue_pair.rs::post_send`.
-            uverbs_post_send(minor, &__kernel_container).map_err(|_| Errno::EINVAL)?;
+            uverbs_post_send(minor, process.id(), &__kernel_container).map_err(map_uverbs_err)?;
 
             Ok(0)
         }
@@ -216,7 +236,7 @@ pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
             process.virtual_address_space.copy_from_user(from_mut(&mut __kernel_container), __user_buf as *const _).map_err(|_| Errno::EINVAL)?;
 
             // Same rationale as POST_SEND above.
-            uverbs_post_recv(minor, &__kernel_container).map_err(|_| Errno::EINVAL)?;
+            uverbs_post_recv(minor, process.id(), &__kernel_container).map_err(map_uverbs_err)?;
 
             Ok(0)
         }
@@ -247,21 +267,25 @@ pub fn uverbs_ctl(minor: usize, cmd: usize, arg: usize) -> SyscallResult {
         UVERBS_CMD_DESTROY_CQ => {
             let cq_num = arg as u32;
 
-            let _ = uverbs_destroy(minor, ConnectX3Nic::destroy_cq, cq_num).map_err(|_| Errno::EINVAL)?;
+            let _ = uverbs_destroy(minor, |dev| dev.destroy_cq(cq_num)).map_err(|_| Errno::EINVAL)?;
 
             Ok(0)
         }
         UVERBS_CMD_DESTROY_QP => {
             let qp_num = arg as u32;
+            let caller = process.id();
 
-            let _ = uverbs_destroy(minor, ConnectX3Nic::destroy_qp, qp_num).map_err(|_| Errno::EINVAL)?;
+            let _ = uverbs_destroy(minor, |dev| dev.destroy_qp(qp_num, caller)).map_err(map_uverbs_err)?;
 
             Ok(0)
         }
         UVERBS_CMD_DEREGISTER_MR => {
             let mr_index = arg as u32;
 
-            let _ = uverbs_destroy(minor, ConnectX3Nic::destroy_mr, mr_index).map_err(|_| Errno::EINVAL)?;
+            // No ownership check: memory-region ownership tracking doesn't
+            // exist yet and is explicitly out of scope for this pass (see
+            // `docs/thesis-plan-1-3.md`'s extension 2 section).
+            let _ = uverbs_destroy(minor, |dev| dev.destroy_mr(mr_index)).map_err(|_| Errno::EINVAL)?;
 
             Ok(0)
         }
