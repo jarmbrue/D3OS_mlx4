@@ -4,6 +4,7 @@ use rdma::uverbs_uapi::{
     ibv_qp_post_send_container,
 };
 use rdma::{ibv_access_flags, ibv_device, ibv_device_attr, ibv_port_attr, ibv_wc};
+use uuid::Uuid;
 use x86_64::structures::paging::frame::PhysFrameRange;
 use x86_64::structures::paging::{PageTableFlags, PhysFrame};
 use x86_64::PhysAddr;
@@ -57,11 +58,12 @@ pub fn uverbs_create_qp<'qp>(minor: usize, qp_container: &'qp mut ibv_qp_contain
     Ok(&qp_container.qp_num)
 }
 
-pub fn uverbs_modify_qp(minor: usize, qp_modify_container: ibv_qp_modify_container) -> Result<(), &'static str> {
+pub fn uverbs_modify_qp(minor: usize, caller: Uuid, qp_modify_container: ibv_qp_modify_container) -> Result<(), &'static str> {
     get_dev_list().lock()
         .get_mut(minor_to_idx(minor)).unwrap()
         .modify_qp(
         qp_modify_container.qp_num,
+        caller,
         &qp_modify_container.attr,
         qp_modify_container.attr_mask,
     )
@@ -73,22 +75,32 @@ pub fn uverbs_poll_cq(minor: usize, cq_num: u32, wc: &mut [ibv_wc]) -> Result<us
         .poll_cq(cq_num, wc)
 }
 
-pub fn uverbs_post_send(minor: usize, send_container_wr: &ibv_qp_post_send_container) -> Result<(), &'static str> {
+pub fn uverbs_post_send(minor: usize, caller: Uuid, send_container_wr: &ibv_qp_post_send_container) -> Result<(), &'static str> {
     get_dev_list().lock()
         .get_mut(minor_to_idx(minor)).unwrap()
-        .post_send(send_container_wr.qp_num, &send_container_wr.wr)
+        .post_send(send_container_wr.qp_num, caller, &send_container_wr.wr)
 }
 
-pub fn uverbs_post_recv(minor: usize, recv_container_wr: &ibv_qp_post_recv_container) -> Result<(), &'static str> {
+pub fn uverbs_post_recv(minor: usize, caller: Uuid, recv_container_wr: &ibv_qp_post_recv_container) -> Result<(), &'static str> {
     get_dev_list().lock()
         .get_mut(minor_to_idx(minor)).unwrap()
-        .post_receive(recv_container_wr.qp_num, &recv_container_wr.wr)
+        .post_receive(recv_container_wr.qp_num, caller, &recv_container_wr.wr)
 }
 
-pub fn uverbs_destroy(minor: usize, destroy_spec_fn: fn(&mut ConnectX3Nic, u32) -> Result<(), &'static str>, x_num: u32) -> Result<(), &'static str> {
+/// Generic destroy-verb helper shared by `DESTROY_CQ`/`DESTROY_QP`/
+/// `DEREGISTER_MR`. Takes a closure rather than the previous bare
+/// `fn(&mut ConnectX3Nic, u32) -> ...` pointer so each call site can capture
+/// whatever it individually needs: `destroy_cq`/`destroy_qp` need the
+/// calling process's `Uuid` for the ownership check added in this pass,
+/// while `destroy_mr` doesn't (memory-region ownership tracking is out of
+/// scope - see `os/kernel/src/device/mlx4.rs::destroy_mr`).
+pub fn uverbs_destroy<F>(minor: usize, destroy_spec_fn: F) -> Result<(), &'static str>
+where
+    F: FnOnce(&mut ConnectX3Nic) -> Result<(), &'static str>,
+{
     let mut device_list = get_dev_list().lock();
     let device = device_list.get_mut(minor_to_idx(minor)).unwrap();
-    destroy_spec_fn(device, x_num)
+    destroy_spec_fn(device)
 }
 
 /// Map a physical memory region into the calling process's user address
