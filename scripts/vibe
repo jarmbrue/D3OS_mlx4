@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# vibe: subcommands for running coding agents in isolated agent/ branches
+# and worktrees.
+#
+# Usage: vibe <command> [options]
+#
+#   vibe claude
+#
+# Every branch created by this script is prefixed with "agent/".
+
+usage() {
+    cat <<'EOF'
+Usage: vibe <command> [options]
+
+Commands:
+  claude    Create a new agent/ branch + worktree and run Claude Code in it.
+  help      Show this help.
+
+Run 'vibe <command> --help' for command-specific options.
+EOF
+}
+
+# Creates branch "agent/<name>" off <base> plus a worktree for it, and
+# prints the worktree path on stdout. All other output goes to stderr so
+# callers can safely capture just the path.
+create_agent_worktree() {
+    local name="$1" base="$2"
+    local branch="agent/${name}"
+
+    local repo_root
+    repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+        echo "vibe: not inside a git repository" >&2
+        exit 1
+    }
+
+    local repo_parent repo_name worktree_root worktree_path
+    repo_parent=$(cd "$repo_root/.." && pwd)
+    repo_name=$(basename "$repo_root")
+    worktree_root="${VIBE_WORKTREE_ROOT:-${repo_parent}/${repo_name}-worktrees}"
+    worktree_path="${worktree_root}/${branch}"
+
+    echo "vibe: creating branch '${branch}' from '${base}'" >&2
+    echo "vibe: adding worktree at '${worktree_path}'" >&2
+    git -C "$repo_root" worktree add -b "$branch" "$worktree_path" "$base" >&2
+
+    printf '%s\n' "$worktree_path"
+}
+
+print_cleanup_hint() {
+    local repo_root="$1" worktree_path="$2" branch="$3"
+    cat <<EOF
+
+vibe: worktree left at: ${worktree_path}
+vibe: to clean up:
+  git -C "${repo_root}" worktree remove "${worktree_path}"
+  git -C "${repo_root}" branch -D "${branch}"
+
+EOF
+}
+
+cmd_claude() {
+    local name="" base=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -n|--name)
+                name="$2"; shift 2 ;;
+            -b|--base)
+                base="$2"; shift 2 ;;
+            -h|--help)
+                cat <<'EOF'
+Usage: vibe claude [-n|--name NAME] [-b|--base REF] [-- claude-args...]
+
+Creates a new agent/ branch (default name: claude-<timestamp>-<random>)
+off REF (default: current branch), adds a worktree for it, and launches
+Claude Code inside that worktree.
+EOF
+                return 0 ;;
+            --)
+                shift; break ;;
+            *)
+                break ;;
+        esac
+    done
+
+    local repo_root
+    repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+        echo "vibe: not inside a git repository" >&2
+        exit 1
+    }
+    base="${base:-$(git -C "$repo_root" rev-parse --abbrev-ref HEAD)}"
+    if [[ -z "$name" ]]; then
+        name="claude-$(date +%Y%m%d-%H%M%S)-$(printf '%04x' $((RANDOM % 65536)))"
+    fi
+    local branch="agent/${name}"
+
+    local worktree_path
+    worktree_path=$(create_agent_worktree "$name" "$base")
+
+    echo "vibe: launching claude in worktree" >&2
+    echo >&2
+
+    set +e
+    (cd "$worktree_path" && claude "$@")
+    local status=$?
+    set -e
+
+    print_cleanup_hint "$repo_root" "$worktree_path" "$branch"
+    exit "$status"
+}
+
+main() {
+    if [[ $# -lt 1 ]]; then
+        usage >&2
+        exit 1
+    fi
+
+    local command="$1"; shift
+    case "$command" in
+        claude)
+            cmd_claude "$@" ;;
+        help|-h|--help)
+            usage ;;
+        *)
+            echo "vibe: unknown command: ${command}" >&2
+            usage >&2
+            exit 1 ;;
+    esac
+}
+
+main "$@"
