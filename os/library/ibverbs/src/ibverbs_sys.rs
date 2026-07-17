@@ -24,7 +24,7 @@ use rdma::mlx4_hw::{
 };
 use syscall::{syscall, SystemCall::Uverb};
 use tock_registers::interfaces::Writeable;
-use rdma::uverbs_uapi::{UVERBS_CMD_CREATE_CQ, UVERBS_CMD_CREATE_QP, UVERBS_CMD_DEREGISTER_MR, UVERBS_CMD_DESTROY_CQ, UVERBS_CMD_DESTROY_QP, UVERBS_CMD_MMAP_CQ, UVERBS_CMD_MMAP_QP, UVERBS_CMD_MODIFY_QP, UVERBS_CMD_POLL_CQ, UVERBS_CMD_POST_RECV, UVERBS_CMD_POST_SEND, UVERBS_CMD_QUERY_DEVICE, UVERBS_CMD_QUERY_DEVICES, UVERBS_CMD_QUERY_PORT, UVERBS_CMD_REGISTER_MR, ibv_cq_container, ibv_cq_mmap_container, ibv_cq_poll_container, ibv_mr_container, ibv_mr_res, ibv_port_attr_container, ibv_qp_container, ibv_qp_mmap_container, ibv_qp_modify_container, ibv_qp_post_recv_container, ibv_qp_post_send_container, UVERBS_MAX_QUERY_DEVICES_REQ};
+use rdma::uverbs_uapi::{UVERBS_CMD_CREATE_CQ, UVERBS_CMD_CREATE_QP, UVERBS_CMD_DEREGISTER_MR, UVERBS_CMD_DESTROY_CQ, UVERBS_CMD_DESTROY_QP, UVERBS_CMD_MMAP_CQ, UVERBS_CMD_MMAP_QP, UVERBS_CMD_MODIFY_QP, UVERBS_CMD_POLL_CQ, UVERBS_CMD_POST_RECV, UVERBS_CMD_POST_SEND, UVERBS_CMD_QUERY_DEVICE, UVERBS_CMD_QUERY_DEVICES, UVERBS_CMD_QUERY_PORT, UVERBS_CMD_REGISTER_MR, ibv_cq_container, ibv_cq_mmap_container, ibv_cq_poll_container, ibv_mr_container, ibv_mr_res, ibv_port_attr_container, ibv_qp_container, ibv_qp_mmap_container, ibv_qp_modify_container, ibv_qp_post_recv_container, ibv_qp_post_send_container, ibv_recv_wr_uapi, ibv_send_wr_uapi, UVERBS_MAX_QUERY_DEVICES_REQ, UVERBS_MAX_SGE};
 
 pub struct ibv_context_ops {
     pub poll_cq: Option<fn(
@@ -380,7 +380,7 @@ pub fn ibv_create_qp<'ctx, 'cq>(
         qp_type: qp_init_attr.qp_type,
         send_cq_num: send_cq.number,
         recv_cq_num: recv_cq.number,
-        ib_caps: &mut qp_init_attr.cap,
+        ib_caps: qp_init_attr.cap,
         qp_num: Default::default()
     };
 
@@ -459,7 +459,7 @@ pub fn ibv_modify_qp(
 
     let ibv_qp_modify_container = ibv_qp_modify_container {
         qp_num: qp.qp_num,
-        attr,
+        attr: *attr,
         attr_mask
     };
 
@@ -495,46 +495,112 @@ fn ibv_poll_cq(
     }
 }
 
-/// post a list of work requests (WRs) to a send queue
+/// Post a (possibly chained, via `wr.next`) list of work requests to a send
+/// queue.
+///
+/// `ibv_send_wr` (the heap-allocated, `Vec<ibv_sge>` + `next: *mut Self`
+/// linked-list type built by `os/library/ibverbs/src/ibverbs.rs`'s
+/// `QueuePair::post_send`/`rdma_write`/`rdma_read`) is not POD, so it can't
+/// be handed to the kernel as a single blob - the kernel previously
+/// raw-byte-copied the `Vec`'s internal `(ptr, len, cap)` triple out of user
+/// memory and dereferenced `wr.next` (a user address) directly in kernel
+/// context, which was unsound independent of the missing validation. The
+/// fix: walk the chain here, in userspace (safe - this is just following
+/// heap pointers within our own process, the same thing `fastpath_post_send`
+/// below already does), translating each `ibv_send_wr` into the fully POD
+/// `ibv_send_wr_uapi` wire format and issuing one `Uverb`/`UVERBS_CMD_POST_SEND`
+/// syscall per WR instead of one per chain.
+///
+/// This does change the chain's atomicity: previously the whole chain was
+/// validated/written into the ring buffer by a single kernel call before any
+/// doorbell was rung (so a failure partway through left nothing posted to
+/// hardware); now each WR is fully posted - including its doorbell ring -
+/// before the next one is attempted, so a failure partway through a chain
+/// can leave a strict prefix of the chain already visible to the HCA. See
+/// `docs/thesis-plan-1-3.md` section 3, option (a) - this is the tradeoff it
+/// explicitly calls out for moving chain-walking out of the kernel.
 unsafe fn ibv_post_send(
     qp: &mut ibv_qp<'_, '_>, wr: &mut ibv_send_wr,
 ) -> Result<()> {
     let dev_fd = qp.send_cq.context.lock();
 
-    let ibv_send_wr_container = ibv_qp_post_send_container {
-        ibv_send_wr: wr,
-        qp_num: qp.qp_num
-    };
+    let mut current: Option<&mut ibv_send_wr> = Some(wr);
+    while let Some(curr) = current.take() {
+        if curr.sg_list.len() > UVERBS_MAX_SGE {
+            return Err(Error::from(ErrorKind::Other));
+        }
 
-    match syscall(Uverb, &[
-        dev_fd,
-        UVERBS_CMD_POST_SEND,
-        (&ibv_send_wr_container as *const ibv_qp_post_send_container).addr()
-    ]) {
-        Ok(_) => Ok(()),
-        Err(_) => Err(Error::from(ErrorKind::Other))
+        let mut wire = ibv_send_wr_uapi {
+            wr_id: curr.wr_id,
+            num_sge: curr.sg_list.len() as u32,
+            opcode: curr.opcode,
+            send_flags: curr.send_flags,
+            wr: curr.wr,
+            ..Default::default()
+        };
+        for (dst, sge) in wire.sg_list.iter_mut().zip(curr.sg_list.iter()) {
+            *dst = *sge;
+        }
+
+        let container = ibv_qp_post_send_container { wr: wire, qp_num: qp.qp_num };
+
+        syscall(Uverb, &[
+            dev_fd,
+            UVERBS_CMD_POST_SEND,
+            (&container as *const ibv_qp_post_send_container).addr()
+        ]).map_err(|_| Error::from(ErrorKind::Other))?;
+
+        current = unsafe {
+            if !curr.next.is_null() {
+                Some(&mut *curr.next)
+            } else {
+                None
+            }
+        };
     }
+    Ok(())
 }
 
-/// post a list of work requests (WRs) to a receive queue
+/// Post a (possibly chained, via `wr.next`) list of work requests to a
+/// receive queue. See `ibv_post_send` above for the full rationale - same
+/// per-WR-syscall design, same atomicity caveat.
 unsafe fn ibv_post_recv(
     qp: &mut ibv_qp<'_, '_>, wr: &mut ibv_recv_wr,
 ) -> Result<()> {
     let dev_fd = qp.recv_cq.context.lock();
 
-    let ibv_recv_wr_container = ibv_qp_post_recv_container {
-        ibv_recv_wr: wr,
-        qp_num: qp.qp_num
-    };
+    let mut current: Option<&mut ibv_recv_wr> = Some(wr);
+    while let Some(curr) = current.take() {
+        if curr.sg_list.len() > UVERBS_MAX_SGE {
+            return Err(Error::from(ErrorKind::Other));
+        }
 
-    match syscall(Uverb, &[
-        dev_fd,
-        UVERBS_CMD_POST_RECV,
-        (&ibv_recv_wr_container as *const ibv_qp_post_recv_container).addr()
-    ]) {
-        Ok(_) => Ok(()),
-        Err(_) => Err(Error::from(ErrorKind::Other))
+        let mut wire = ibv_recv_wr_uapi {
+            wr_id: curr.wr_id,
+            num_sge: curr.sg_list.len() as u32,
+            ..Default::default()
+        };
+        for (dst, sge) in wire.sg_list.iter_mut().zip(curr.sg_list.iter()) {
+            *dst = *sge;
+        }
+
+        let container = ibv_qp_post_recv_container { wr: wire, qp_num: qp.qp_num };
+
+        syscall(Uverb, &[
+            dev_fd,
+            UVERBS_CMD_POST_RECV,
+            (&container as *const ibv_qp_post_recv_container).addr()
+        ]).map_err(|_| Error::from(ErrorKind::Other))?;
+
+        current = unsafe {
+            if !curr.next.is_null() {
+                Some(&mut *curr.next)
+            } else {
+                None
+            }
+        };
     }
+    Ok(())
 }
 
 // ============================================================================
