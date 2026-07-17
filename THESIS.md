@@ -128,4 +128,43 @@ data model.
 
 ## Thesis notes
 
-_(Research questions, planned modifications, and benchmark plans go here.)_
+Planned extensions to the mlx4 driver / ibverbs stack, roughly in priority order:
+
+1. **Use interrupts instead of polling.** Completion is currently synchronous polling —
+   userspace calls `poll_cq` → `uverbs_poll_cq` (`os/kernel/src/infiniband/uverbs_cmd.rs`) →
+   `CompletionQueue::poll` (`os/kernel/src/device/mlx4/completion_queue.rs`). An `EventQueue`
+   already exists and is initialized at device bring-up (`device/mlx4/event_queue.rs`,
+   `init_eqs`), but nothing currently wires EQ interrupts into waking a blocked completion
+   wait — that's the gap to close.
+2. **Add protection for queue pairs between different processes.** QPs are tracked in global
+   vectors on `ConnectX3Nic` (`os/kernel/src/device/mlx4.rs`) and looked up purely by
+   minor/QP number in `uverbs_cmd.rs`, with no ownership check tying a QP to the process that
+   created it — any process that can reach the `Uverb` syscall can currently touch any QP.
+3. **Improve the separation between user and kernel space.** `uverbs_ctl`
+   (`os/kernel/src/infiniband/uverbs.rs`) does raw unsafe copies of "container" structs between
+   user and kernel memory with fairly minimal validation beyond the magic number/minor check —
+   worth revisiting for proper bounds/pointer validation at the syscall boundary.
+4. **Port some Linux rdma-core/infiniband-diags utilities to D3OS.** `ibping` and `ibstat`
+   (`os/application/infiniband-diags/`) are the existing, minimal ports; more of the upstream
+   tool set could follow the same pattern (open device via `ibverbs`, query/print state).
+5. **Add support for MAD agent registration** (low priority). `device/mlx4/port.rs` already
+   defines a `MadPacket` type, but there's no MAD agent registration/dispatch mechanism above
+   it yet.
+6. **Simplify the architecture by removing the ibverbs-FFI layer** (low priority).
+   `os/library/ibverbs/src/ibverbs_sys.rs` mirrors the C `libibverbs` FFI surface as an
+   intermediate layer under the ergonomic `ibverbs.rs` API; since there's no actual C ABI
+   compatibility requirement in D3OS, `ibverbs.rs` could plausibly talk to the `Uverb` syscall
+   more directly.
+
+### Benchmarks
+
+Throughput and latency need to be measured for two topologies, building on the existing
+benchmark harness in `os/application/rdma/mlx4` (`bench.rs`, `rdma_read.rs`, `rdma_write.rs`):
+
+- **D3OS ↔ Linux** — the current `ib1`/`ib2` setup (see "Testing on real InfiniBand hardware"
+  in `CLAUDE.md`) already fits this directly: `ib1` (Linux, also running the subnet manager)
+  as one endpoint, `ib2` (D3OS under QEMU/VFIO passthrough) as the other.
+- **D3OS ↔ D3OS** — needs a topology change: `ib1` can no longer double as both a fabric
+  peer *and* the subnet manager once it's replaced by a second D3OS instance, since D3OS
+  doesn't implement SM functionality. This requires a separate IB switch running the subnet
+  manager, with both `ib1` and `ib2` passing their ConnectX-3 cards through to D3OS.
