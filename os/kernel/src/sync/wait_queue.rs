@@ -26,6 +26,18 @@ pub struct WaitQueue {
     queue: IrqSaveSpinlock<VecDeque<(Uuid, usize)>>,
 }
 
+impl core::fmt::Debug for WaitQueue {
+    // `IrqSaveSpinlock` doesn't implement `Debug` (its `UnsafeCell` interior
+    // can't be inspected without locking, which a `Debug` impl shouldn't do
+    // - especially not from this codebase's typical panic/interrupt-time
+    // debug-printing use of `Debug`, where locking could itself deadlock).
+    // Manual no-field impl so callers embedding a `WaitQueue` (e.g.
+    // `CompletionQueue`'s `#[derive(Debug)]`) can still derive `Debug`.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("WaitQueue").finish_non_exhaustive()
+    }
+}
+
 impl WaitQueue {
     pub fn new() -> WaitQueue {
         WaitQueue {
