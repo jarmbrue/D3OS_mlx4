@@ -459,6 +459,30 @@ impl<'ctx> CompletionQueue<'ctx> {
             Ok(&mut completions[0..n as usize])
         }
     }
+
+    /// Like [`poll`](Self::poll), but if the CQ is empty, genuinely blocks
+    /// the calling thread off the CPU until at least one completion is
+    /// available (or forever, if none ever arrives) instead of returning
+    /// an empty slice.
+    ///
+    /// Unlike `poll`, this always issues a syscall regardless of the
+    /// `fastpath-verbs` feature - see `ibverbs_sys::ibv_poll_cq_blocking`'s
+    /// docs for why the zero-syscall ring-buffer fast path can't do this
+    /// itself. A caller using the fast path for the common case can still
+    /// fall back to this one when it would otherwise busy-spin.
+    #[inline]
+    pub fn poll_blocking<'c>(
+        &self,
+        completions: &'c mut [ffi::ibv_wc],
+    ) -> io::Result<&'c mut [ffi::ibv_wc]> {
+        let n = ffi::ibv_poll_cq_blocking(&self.cq, completions)?;
+
+        if n < 0 {
+            Err(io::Error::new(io::ErrorKind::Other, "ibv_poll_cq (blocking) failed"))
+        } else {
+            Ok(&mut completions[0..n as usize])
+        }
+    }
 }
 
 /// An unconfigured `QueuePair`.

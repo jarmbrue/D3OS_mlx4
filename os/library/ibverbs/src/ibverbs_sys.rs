@@ -477,12 +477,33 @@ pub fn ibv_modify_qp(
 fn ibv_poll_cq(
     cq: &ibv_cq<'_>, wc: &mut [ibv_wc],
 ) -> Result<i32> {
+    poll_cq_impl(cq, wc, false)
+}
+
+/// Block until at least one completion is available on `cq` (or forever, if
+/// none ever arrives), then drain up to `wc.len()` of them.
+///
+/// Unlike `ibv_poll_cq`/`fastpath_poll_cq`, this always issues a syscall,
+/// even when built with the `fastpath-verbs` feature: only the kernel can
+/// actually take the calling thread off the CPU (`os/kernel/src/sync/
+/// wait_queue.rs`'s `WaitQueue` + `Scheduler::block`/`deblock`, see
+/// `docs/thesis-plan-1-3.md`'s extension 1) - the zero-syscall ring-buffer
+/// fast path has no way to do that, by construction. There is currently no
+/// fast-path-aware "arm the CQ, then block" combination; a caller using the
+/// fast path for the common case can still fall back to this for the
+/// "nothing to do, might as well sleep instead of spin" case.
+pub fn ibv_poll_cq_blocking(cq: &ibv_cq<'_>, wc: &mut [ibv_wc]) -> Result<i32> {
+    poll_cq_impl(cq, wc, true)
+}
+
+fn poll_cq_impl(cq: &ibv_cq<'_>, wc: &mut [ibv_wc], blocking: bool) -> Result<i32> {
     let dev_fd = cq.context.lock();
 
     let ibv_cq_poll_container = ibv_cq_poll_container {
         wc: wc.as_mut_ptr(),
         wc_len: wc.len(),
         cq_num: cq.number,
+        blocking,
     };
 
     match syscall(Uverb, &[
