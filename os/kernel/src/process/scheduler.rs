@@ -130,6 +130,36 @@ pub struct Scheduler {
 unsafe impl Send for Scheduler {}
 unsafe impl Sync for Scheduler {}
 
+/// Acquire `mutex`, tolerating same-core interrupt reentrancy: if an
+/// interrupt handler (concretely, `Mlx4InterruptHandler::trigger` calling
+/// into `WaitQueue::notify_one`/`notify_all` -> `Scheduler::deblock`, see
+/// `docs/thesis-plan-1-3.md`'s extension 1) needs one of `Scheduler`'s
+/// locks while the very thread it just interrupted already holds it, a
+/// plain blocking `.lock()` would spin forever: the lock-holder can never
+/// run again to release it - this core is now executing the interrupt
+/// handler in its place, and control only returns to the interrupted
+/// thread once the handler (and everything it calls) has returned.
+///
+/// Mirrors the `try_lock()` + `force_unlock()` idiom `InterruptDispatcher::
+/// dispatch()`/`Apic::end_of_interrupt()` already use for the identical
+/// same-core-reentrancy hazard; see those two functions' comments for the
+/// "extremely unlikely, and the guarded state is simple enough that a torn
+/// critical section is an acceptable, bounded risk" rationale this mirrors.
+/// `deblock`'s own doc comment spells out the one residual gap this doesn't
+/// close (heap-allocator reentrancy if a `Vec`/`VecDeque` push needs to
+/// grow the backing allocation while the allocator's own lock is held by
+/// the interrupted thread).
+fn force_try_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    let mut guard = mutex.try_lock();
+    while guard.is_none() {
+        unsafe {
+            mutex.force_unlock();
+        }
+        guard = mutex.try_lock();
+    }
+    guard.unwrap()
+}
+
 /// Called from assembly code, after the thread has been switched
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn unlock_scheduler() {
@@ -325,17 +355,68 @@ impl Scheduler {
         }
     }
 
-    /// Requeue thread with `tid` from process with `pid` to the ready queue of the scheduler
+    /// Requeue thread with `tid` from process with `pid` to the ready queue of the scheduler.
+    ///
+    /// Safe to call from interrupt context as well as ordinary thread
+    /// context: `Mlx4InterruptHandler::trigger()` calls this (indirectly,
+    /// via `CompletionQueue::notify_waiters` -> `WaitQueue::notify_one`/
+    /// `notify_all`) to wake a thread genuinely blocked in `poll_cq`, and
+    /// `os/kernel/src/naming/tmpfs.rs`'s pipe implementation calls it from
+    /// ordinary thread context. Every lock touched here goes through
+    /// `force_try_lock` for exactly that reason - see its docs.
+    ///
+    /// Deliberately does *not* reuse `ready()`: `ready()` can call
+    /// `join_map.insert(id, Vec::new())` (which would wrongly reset the
+    /// join-waiter list of a thread that already had one from its original
+    /// creation) and can call `self.switch_thread_no_interrupt()` in a loop
+    /// while contending for `join_map` - an actual context switch attempted
+    /// from inside an interrupt handler, which is unsound. `deblock` only
+    /// ever does a direct, minimal `ready_queue` push.
+    ///
+    /// Closes the "notify fires before the target thread finishes calling
+    /// `block()`" lost-wakeup race using the `wake_pending` latch
+    /// (`Thread::set_wake_pending`/`should_block_or_consume_wake`): if the
+    /// target thread isn't in `blocked_list` yet, it can only be *this*
+    /// core's `current_thread` (a thread cannot migrate cores while
+    /// running, only while sitting in a ready queue) or some other core's
+    /// `current_thread` (handled by the remote `MessageCmd::Deblock` case in
+    /// `handle_inbox_cmd`, which applies the same latch) - either way, the
+    /// wakeup is latched instead of silently dropped.
     pub fn deblock(&self, pid: Uuid, tid: usize) {
-        let mut block_list = self.blocked_list.lock();
+        // 1) Already parked in this core's blocked_list? Move it directly
+        // onto the ready queue (see docs above for why not `ready()`).
+        {
+            let mut block_list = force_try_lock(&self.blocked_list);
+            if let Some(pos) = block_list.iter().position(|thread| thread.id() == tid && thread.process().id() == pid) {
+                let thread = block_list.remove(pos);
+                drop(block_list);
 
-        if let Some(pos) = block_list.iter().position(|thread| thread.id() == tid && thread.process().id() == pid) {
-            let thread = block_list.remove(pos);
-            self.ready(thread);
+                thread.set_state(ThreadState::Ready);
+                let mut state = force_try_lock(&self.ready_state);
+                inc_rq_len();
+                state.ready_queue.push_front(thread);
+                return;
+            }
         }
-        else {
-            schedule_on_all_others(MessageItem::Cmd(MessageCmd::Deblock {pid, tid}))
+
+        // 2) Not blocked here yet - it can only be the thread currently
+        // executing on this very core, still on its way to calling
+        // `block()` (`WaitQueue::wait` registers itself before calling
+        // `block()`). Latch the wakeup instead of losing it.
+        {
+            let state = force_try_lock(&self.ready_state);
+            if let Some(current) = state.current_thread.as_ref() {
+                if current.id() == tid && current.process().id() == pid {
+                    current.set_wake_pending();
+                    return;
+                }
+            }
         }
+
+        // 3) Not found locally at all - ask every other core to check
+        // (covers both "blocked there" and "currently running there, about
+        // to block").
+        schedule_on_all_others(MessageItem::Cmd(MessageCmd::Deblock {pid, tid}))
     }
 
     /// Helper function for switching a thread not caused by an interrupt
@@ -896,17 +977,34 @@ impl Scheduler {
                     join_map.remove(&tid);
                 }
             }
-            // If the thread is locally blocked, requeue it.
+            // Cross-core fallback of `Scheduler::deblock` (see its docs):
+            // this core didn't have the target thread in its local
+            // `blocked_list` when `deblock` ran there, so every other core
+            // was asked to check. Reachable from this core's own interrupt
+            // context too (`switch_thread_from_interrupt` ->
+            // `drain_inbox_into_ready` -> here), so `blocked_list` is
+            // accessed via `force_try_lock` for the same same-core-
+            // reentrancy reason `deblock` itself uses it.
             MessageCmd::Deblock { pid, tid } => {
-                let mut blocked_list = self.blocked_list.lock();
                 if is_thread_alive(tid) == false { return; }
 
-                if let Some(pos) = blocked_list
-                    .iter().position(|t| t.id() == tid && t.process().id() == pid)
-                {
-                    let thread = blocked_list.remove(pos);
+                let found_blocked = {
+                    let mut blocked_list = force_try_lock(&self.blocked_list);
+                    blocked_list
+                        .iter().position(|t| t.id() == tid && t.process().id() == pid)
+                        .map(|pos| blocked_list.remove(pos))
+                };
+
+                if let Some(thread) = found_blocked {
+                    thread.set_state(ThreadState::Ready);
                     state.ready_queue.push_front(thread);
                     inc_rq_len();
+                } else if let Some(current) = state.current_thread.as_ref() {
+                    // Still not found: this core's current thread may be the
+                    // one on its way to `block()` (see `deblock`'s case 2).
+                    if current.id() == tid && current.process().id() == pid {
+                        current.set_wake_pending();
+                    }
                 }
             }
             // if you have this thread, kill it

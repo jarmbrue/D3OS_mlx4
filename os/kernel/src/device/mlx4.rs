@@ -9,27 +9,34 @@ mod device;
 mod event_queue;
 mod fw;
 mod icm;
+mod interrupt;
 mod port;
 mod profile;
 mod queue_pair;
 mod utils;
 
+use alloc::boxed::Box;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use cmd::CommandInterface;
 use completion_queue::CompletionQueue;
 use event_queue::{EventQueue, init_eqs};
 use fw::{Capabilities, Hca, MappedFirmwareArea};
 use icm::MappedIcmTables;
-use log::trace;
+use interrupt::Mlx4InterruptHandler;
+use log::{info, trace, warn};
 use pci_types::{CommandRegister, EndpointHeader};
 
 use rdma::{ibv_access_flags, ibv_device_attr, ibv_port_attr, ibv_qp_attr, ibv_qp_attr_mask, ibv_qp_cap, ibv_qp_type, ibv_wc};
 use rdma::uverbs_uapi::{ibv_recv_wr_uapi, ibv_send_wr_uapi};
 
-use crate::pci_bus;
+use crate::interrupt::interrupt_dispatcher::InterruptVector;
+use crate::sync::irqsave_spinlock::IrqSaveSpinlock;
+use crate::sync::wait_queue::WaitQueue;
+use crate::{apic, interrupt_dispatcher, pci_bus};
 use port::Port;
 use queue_pair::QueuePair;
-use spin::{Mutex, Once, RwLock};
+use spin::{Once, RwLock};
 use utils::MappedPages;
 
 use device::{Ownership, ResetRegisters};
@@ -113,15 +120,41 @@ pub fn minor_to_idx(minor: usize) -> usize {
 }
 
 static MINOR: AtomicUsize = AtomicUsize::new(DEVICE_START);
-static DEV_LIST: Once<Mutex<Vec<ConnectX3Nic>>> = Once::new();
+
+/// List of all initialized ConnectX-3 NICs.
+///
+/// **Critical invariant (extension 1, `docs/thesis-plan-1-3.md`)**: every
+/// uverbs syscall handler locks this while running, and the syscall
+/// trampoline runs with interrupts enabled
+/// (`syscall_dispatcher.rs`, `"sti"`). Once `ConnectX3Nic::init()` registers
+/// a legacy INTx handler (`Mlx4InterruptHandler`, `mlx4/interrupt.rs`), that
+/// handler *also* needs this lock (to find the device a firing interrupt
+/// belongs to and drain its EQ). A plain `spin::Mutex` would self-deadlock
+/// the instant the interrupt fires on the same core while a syscall handler
+/// already holds it - this was the single biggest correctness risk called
+/// out for this extension, and had to be fixed before/alongside interrupt
+/// registration, not as a follow-up.
+///
+/// Fixed by using `IrqSaveSpinlock` instead of `spin::Mutex`: it disables
+/// this core's interrupts for the duration of the critical section
+/// (`crate::device::cpu::disable_int_nested`), so the mlx4 IRQ line simply
+/// cannot fire on this core while anything already holds this lock -  no
+/// same-core reentrancy is possible by construction, unlike the
+/// `try_lock()`/`force_unlock()` idiom used elsewhere in this codebase for
+/// the same *class* of hazard (`InterruptDispatcher::dispatch`,
+/// `Apic::end_of_interrupt`, and this extension's own
+/// `Scheduler::force_try_lock` for `ready_state`/`blocked_list`, which
+/// couldn't use this same stronger fix without a much larger, out-of-scope
+/// change to `Scheduler`'s locking).
+static DEV_LIST: Once<IrqSaveSpinlock<Vec<ConnectX3Nic>>> = Once::new();
 
 fn next_minor() -> usize {
     MINOR.fetch_add(1, Relaxed)
 }
 
 /// List of all initialized ConnectX-3 NICs
-pub fn get_dev_list() -> &'static Mutex<Vec<ConnectX3Nic>> {
-    DEV_LIST.call_once(|| Mutex::new(Vec::with_capacity(devices_supported())))
+pub fn get_dev_list() -> &'static IrqSaveSpinlock<Vec<ConnectX3Nic>> {
+    DEV_LIST.call_once(|| IrqSaveSpinlock::new(Vec::with_capacity(devices_supported())))
 }
 
 /// Struct representing a ConnectX-3 card
@@ -205,9 +238,45 @@ impl ConnectX3Nic {
         // give us the interrupt pin
         hca.query_adapter(&mut cmd)?;
 
+        // `minor` is needed both by the interrupt handler below (to know
+        // which device in `DEV_LIST` a firing interrupt belongs to) and by
+        // the EQ setup, so it has to be computed before both instead of
+        // right before pushing into `DEV_LIST` as before. `next_minor()`
+        // only touches its own atomic counter, so moving it earlier is
+        // side-effect-free.
+        let minor = next_minor();
+
+        // Legacy INTx only - D3OS has no MSI-X support anywhere, matching
+        // `rtl8139.rs`/`virtio/mod.rs`. Mirrors `Rtl8139::plugin()`
+        // (`device/rtl8139.rs`) and `virtio/mod.rs`'s interrupt wiring: read
+        // the PCI interrupt line, convert to a host `InterruptVector`,
+        // assign our handler to it and unmask it at the APIC. A line value
+        // of 0 or 0xFF means "no legacy interrupt assigned" (matching
+        // `virtio/mod.rs`'s own check) - fall back to the pre-existing
+        // always-polling EQ mode in that case rather than registering a
+        // handler for a nonsensical vector.
+        let (_, interrupt_line) = mlx3_pci_dev.interrupt(config_space);
+        let interrupts_enabled = if interrupt_line != 0 && interrupt_line != 0xFF {
+            match InterruptVector::try_from(interrupt_line + 32) {
+                Ok(vector) => {
+                    interrupt_dispatcher().assign(vector, Box::new(Mlx4InterruptHandler::new(minor)));
+                    apic().allow(vector);
+                    info!("mlx4: registered legacy INTx handler for device minor {minor} on vector {vector:?}");
+                    true
+                }
+                Err(_) => {
+                    warn!("mlx4: PCI interrupt line {interrupt_line} does not map to a valid host vector, falling back to polling EQ");
+                    false
+                }
+            }
+        } else {
+            warn!("mlx4: no legacy PCI interrupt line assigned, falling back to polling EQ");
+            false
+        };
+
         // get the doorbells and the BlueFlame section
         let (mut doorbells, blueflame) = capabilities.get_doorbells_and_blueflame(user_access_region)?;
-        let eqs = init_eqs(&mut cmd, &mut doorbells, &capabilities, &mut offsets, icm_tables.memory_regions())?;
+        let eqs = init_eqs(&mut cmd, &mut doorbells, &capabilities, &mut offsets, icm_tables.memory_regions(), interrupts_enabled)?;
 
         hca.config_mad_demux(&mut cmd, &capabilities)?;
 
@@ -216,8 +285,6 @@ impl ConnectX3Nic {
         //let _: () = cmd.execute_command(cmd::Opcode::ConfSpecialQp, (), (), offsets.base_qpn)?;
 
         let ports = hca.init_ports(&mut cmd, &capabilities, offsets.base_qpn)?;
-
-        let minor = next_minor();
 
         let nic = Self {
             cmd,
@@ -297,6 +364,63 @@ impl ConnectX3Nic {
             return Err(ERR_NOT_OWNER);
         }
         cq.poll(&mut self.eqs, &mut self.qps, &mut self.doorbells, wc)
+    }
+
+    /// Look up `number`, verify `caller` owns it (the exact same
+    /// `cq.creator() != caller` check `poll_cq` above uses - deliberately
+    /// re-run here rather than trusted from an earlier call, since this is
+    /// the gate that decides "may this caller block-wait on this CQ"), arm
+    /// it for the next completion interrupt, and return a cloneable handle
+    /// to its wait queue.
+    ///
+    /// This is the building block `uverbs_cmd::uverbs_poll_cq`'s blocking
+    /// mode uses to wait *without* holding `DEV_LIST`'s lock - see
+    /// `CompletionQueue::wq`'s docs for why blocking while still holding it
+    /// would deadlock `Mlx4InterruptHandler::trigger()`, which also needs
+    /// that lock to find this CQ.
+    pub fn arm_cq_for_wait(&mut self, number: u32, caller: Uuid) -> Result<Arc<WaitQueue>, &'static str> {
+        let cq = self.cqs.iter_mut().find(|cq| cq.number() == number).ok_or("invalid completion queue number")?;
+        if cq.creator() != caller {
+            return Err(ERR_NOT_OWNER);
+        }
+        cq.arm(&mut self.doorbells)?;
+        Ok(cq.wait_queue())
+    }
+
+    /// Re-arm `number` for the next completion interrupt. Used by the
+    /// blocking `poll_cq` loop between "found nothing, about to wait again"
+    /// iterations - hardware CQ arming is effectively one-shot per
+    /// completion, so every time the wait predicate is about to block
+    /// again it must re-arm first, or a completion that arrives while
+    /// "unarmed" would never generate an interrupt and the waiter would
+    /// hang forever. No ownership check here: this is only ever called
+    /// immediately after `arm_cq_for_wait` or `poll_cq` already validated
+    /// ownership for the same `(caller, number)` pair in the same blocking
+    /// call, with no intervening yield that could let the CQ change hands.
+    pub fn rearm_cq(&mut self, number: u32) -> Result<(), &'static str> {
+        let cq = self.cqs.iter_mut().find(|cq| cq.number() == number).ok_or("invalid completion queue number")?;
+        cq.arm(&mut self.doorbells)
+    }
+
+    /// Drain this device's (single, `NUM_EQS == 1`) event queue and wake
+    /// any thread blocked in `poll_cq` on a completion queue that just got
+    /// a `Completion` EQE. Called from `Mlx4InterruptHandler::trigger()`,
+    /// itself called by `InterruptDispatcher::dispatch()` while holding
+    /// `get_dev_list()`'s `IrqSaveSpinlock` (so interrupts are already
+    /// masked on this core for the whole call - see `DEV_LIST`'s docs).
+    pub(crate) fn handle_interrupt(&mut self) {
+        let minor = self.minor;
+        let Self { eqs, cqs, doorbells, .. } = self;
+        let Some(eq) = eqs.get_mut(0) else { return };
+        if let Err(e) = eq.handle_events(doorbells, |cqn| {
+            if let Some(cq) = cqs.iter().find(|cq| cq.number() == cqn) {
+                cq.notify_waiters();
+            } else {
+                warn!("mlx4: interrupt on device minor {minor} named unknown CQ {cqn}");
+            }
+        }) {
+            log::error!("mlx4: error draining event queue on device minor {minor}: {e}");
+        }
     }
 
     /// Destroy a completion queue. Refuses to destroy a CQ created by a

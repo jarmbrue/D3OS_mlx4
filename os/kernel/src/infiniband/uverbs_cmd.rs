@@ -69,10 +69,87 @@ pub fn uverbs_modify_qp(minor: usize, caller: Uuid, qp_modify_container: ibv_qp_
     )
 }
 
-pub fn uverbs_poll_cq(minor: usize, caller: Uuid, cq_num: u32, wc: &mut [ibv_wc]) -> Result<usize, &'static str> {
-    get_dev_list().lock()
-        .get_mut(minor_to_idx(minor)).unwrap()
-        .poll_cq(cq_num, caller, wc)
+/// Poll `cq_num` for completions. If `blocking` is true and none are
+/// immediately available, genuinely block the calling thread off the CPU
+/// until `Mlx4InterruptHandler::trigger()` observes a completion for this
+/// CQ, instead of returning empty-handed. See `ibv_cq_poll_container::
+/// blocking`'s docs for why this is a mode flag on the existing command
+/// rather than a new syscall.
+///
+/// The non-blocking fast path (and every re-check while blocked) goes
+/// through `ConnectX3Nic::poll_cq` exactly as before - the ownership check
+/// there (`cq.creator() != caller` -> `ERR_NOT_OWNER`) is what gates "may
+/// this caller block-wait on this CQ" and is never duplicated or bypassed.
+///
+/// Must not (and does not) hold `get_dev_list()`'s lock while blocked: the
+/// interrupt handler that is supposed to wake this call also needs that
+/// lock (to find this CQ), so `ConnectX3Nic::arm_cq_for_wait` hands back a
+/// cloned `Arc<WaitQueue>` handle *before* this function's lock guards are
+/// dropped, and every re-check inside the wait predicate below takes a
+/// fresh, short-lived lock of its own.
+pub fn uverbs_poll_cq(minor: usize, caller: Uuid, cq_num: u32, blocking: bool, wc: &mut [ibv_wc]) -> Result<usize, &'static str> {
+    // Fast path: always tried first, even in blocking mode, so a
+    // completion already sitting in the CQ ring is returned without ever
+    // touching the scheduler.
+    let n = get_dev_list().lock()
+        .get_mut(minor_to_idx(minor)).ok_or("invalid device")?
+        .poll_cq(cq_num, caller, wc)?;
+    if n > 0 || !blocking {
+        return Ok(n);
+    }
+
+    // Nothing available yet and the caller wants to block. Arm the CQ for
+    // the next completion interrupt and grab a handle to its wait queue -
+    // both while briefly holding DEV_LIST's lock, released again before we
+    // ever call `wq.wait` below.
+    let wq = get_dev_list().lock()
+        .get_mut(minor_to_idx(minor)).ok_or("invalid device")?
+        .arm_cq_for_wait(cq_num, caller)?;
+
+    let mut found = 0usize;
+    let mut wait_err: Option<&'static str> = None;
+    wq.wait(
+        || {
+            let mut list = get_dev_list().lock();
+            let Some(dev) = list.get_mut(minor_to_idx(minor)) else {
+                wait_err = Some("invalid device");
+                return true;
+            };
+            match dev.poll_cq(cq_num, caller, wc) {
+                Ok(n) if n > 0 => {
+                    found = n;
+                    true
+                }
+                Ok(_) => {
+                    // Still nothing: re-arm so the *next* completion still
+                    // generates an interrupt before we go back to sleep.
+                    // Ownership was already validated by `poll_cq` above in
+                    // this same call, with no intervening yield - see
+                    // `rearm_cq`'s docs on why no second check is needed.
+                    if let Err(e) = dev.rearm_cq(cq_num) {
+                        wait_err = Some(e);
+                        return true;
+                    }
+                    false
+                }
+                Err(e) => {
+                    // Includes `ERR_NOT_OWNER` (can't happen here - caller
+                    // was already validated - kept only for symmetry with
+                    // the non-blocking path) and "CQ destroyed while we
+                    // were waiting" (`invalid completion queue number`):
+                    // either way, stop waiting instead of hanging forever.
+                    wait_err = Some(e);
+                    true
+                }
+            }
+        },
+        "poll_cq: waiting for completion",
+    );
+
+    if let Some(e) = wait_err {
+        return Err(e);
+    }
+    Ok(found)
 }
 
 pub fn uverbs_post_send(minor: usize, caller: Uuid, send_container_wr: &ibv_qp_post_send_container) -> Result<(), &'static str> {

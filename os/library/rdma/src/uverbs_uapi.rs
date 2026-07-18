@@ -173,6 +173,27 @@ pub struct ibv_cq_poll_container {
     pub wc: *mut ibv_wc,
     pub wc_len: usize,
     pub cq_num: u32,
+    /// Extension 1 (`docs/thesis-plan-1-3.md`): if true and no completion
+    /// is immediately available, `uverbs_ctl` genuinely blocks the calling
+    /// thread off the CPU until the mlx4 interrupt handler observes a
+    /// completion for this CQ (or forever, if none ever arrives - the
+    /// caller decides how long to keep calling, same contract as real
+    /// `ibv_poll_cq`).
+    ///
+    /// This is an implicit blocking-mode flag on the existing
+    /// `UVERBS_CMD_POLL_CQ` command rather than a new syscall/
+    /// `UverbsInnerCmd` variant: real ibverbs signals "block for a
+    /// completion" via a separate completion channel + `ibv_get_cq_event`,
+    /// which doesn't exist in `os/library/ibverbs` yet and would be a much
+    /// larger addition than this extension needs. Growing this
+    /// already-existing, single-purpose container by one `bool` field
+    /// keeps the `SystemCall`/`UverbsInnerCmd` enum-variant-order contract
+    /// (`docs/new-syscall.howto.md`) untouched - both sides of the syscall
+    /// boundary already share this exact struct via the `rdma` crate, so
+    /// `size_of::<ibv_cq_poll_container>()` (and therefore
+    /// `UVERBS_CMD_POLL_CQ`'s encoded size) stays in sync automatically on
+    /// a rebuild, with nothing to update by hand.
+    pub blocking: bool,
 }
 
 /// Fully POD wire-format representation of a single send work request, used

@@ -14,7 +14,7 @@ use bitflags::bitflags;
 use log::trace;
 use modular_bitfield_msb::{
     bitfield,
-    specifiers::{B10, B16, B2, B22, B24, B4, B40, B5, B6, B60, B7, B72, B96},
+    specifiers::{B10, B16, B2, B22, B24, B4, B40, B5, B6, B60, B64, B7, B72, B96},
 };
 use rdma::mlx4_hw::DoorbellPage;
 use strum_macros::FromRepr;
@@ -34,14 +34,28 @@ const NUM_SPARE_EQE: u32 = 0x80;
 /// Initialize the event queues.
 /// This creates all of the EQs ahead of time,
 /// passes their ownership to the hardware and calls MapEq.
+///
+/// `interrupts_enabled` reflects whether `ConnectX3Nic::init()` managed to
+/// register a legacy INTx handler for this device with the interrupt
+/// dispatcher/APIC (see `mlx4/interrupt.rs`). If so, the EQ is programmed
+/// `EQ_STATE_ARMED` (hardware will raise the shared legacy INTx line on new
+/// events) instead of `EQ_STATE_FIRED` (the old, permanently-polling mode);
+/// see [`EventQueue::new`] for what value is actually programmed into the
+/// EQ context's `intr` field either way.
 pub(super) fn init_eqs(
     cmd: &mut CommandInterface, doorbells: &mut [MappedPages], caps: &Capabilities, offsets: &mut Offsets, memory_regions: &mut MrTable,
+    interrupts_enabled: bool,
 ) -> Result<Vec<EventQueue>, &'static str> {
     const NUM_EQS: usize = 1;
     let mut eqs = Vec::with_capacity(NUM_EQS);
     for _ in 0..NUM_EQS {
-        // TODO: use interrupts here
-        let eq = EventQueue::new(cmd, caps, offsets, memory_regions, None)?;
+        // Legacy INTx only (no MSI-X support in this driver): with a single
+        // shared interrupt line and a single completion EQ, the hardware
+        // "interrupt vector index" this device needs is always 0 - see
+        // `EventQueue::new`'s docs on the `base_vector` parameter for the
+        // derivation (cross-checked against Linux mlx4_core's
+        // `mlx4_create_eq`/`mlx4_init_eq_table`).
+        let eq = EventQueue::new(cmd, caps, offsets, memory_regions, interrupts_enabled.then_some(0u8))?;
         eqs.push(eq);
     }
     // map all events to the first (and only) event queue
@@ -67,8 +81,23 @@ pub(super) struct EventQueue {
 }
 
 impl EventQueue {
-    // Create a new event queue. If `base_vector` is given, it will be interrupt
-    // driven, else it will be polled.
+    /// Create a new event queue. If `base_vector` is given, it will be
+    /// interrupt driven, else it will be polled.
+    ///
+    /// `base_vector` is *not* an x86 IDT vector, a PCI IRQ line/pin, or any
+    /// other host-side interrupt number - despite the field's name (kept
+    /// from the pre-extension-1 scaffolding) it is the HCA's own
+    /// "completion vector index", written verbatim into the EQ context's
+    /// `intr` field (`ctx.set_intr(...)` below). Cross-checked against
+    /// upstream Linux mlx4_core (`drivers/net/ethernet/mellanox/mlx4/eq.c`,
+    /// `mlx4_create_eq`/`mlx4_init_eq_table`): `eq_context->intr = intr;`
+    /// verbatim, and when the device has no MSI-X support (this driver's
+    /// case, always - `NUM_EQS == 1`, one shared legacy INTx line), every
+    /// caller of `mlx4_create_eq` passes `intr = 0`. The actual host-side
+    /// interrupt wiring (x86 vector, `InterruptDispatcher::assign`,
+    /// `Apic::allow`) happens once, at the whole-device level, in
+    /// `ConnectX3Nic::init()` (`mlx4/interrupt.rs`) - entirely independent
+    /// of this value.
     fn new(
         cmd: &mut CommandInterface, caps: &Capabilities, offsets: &mut Offsets, memory_regions: &mut MrTable, base_vector: Option<u8>,
     ) -> Result<Self, &'static str> {
@@ -88,9 +117,17 @@ impl EventQueue {
         let mapped_page_to_frame = utils::create_cont_mapping_with_dma_flags(utils::pages_required(num_pages * PAGE_SIZE + EQE_SIZE - 1))?.fetch_in_addr()?;
 
         let mtt = memory_regions.alloc_mtt(cmd, caps, num_pages, mapped_page_to_frame.1)?;
-        // TODO: register interrupt correctly
         // TODO: Should use MSI-X instead of legacy INTs
-        let intr_vector = base_vector.and_then(|_| todo!());
+        //
+        // There is nothing left to "resolve" here beyond `base_vector`
+        // itself: with a single EQ and no MSI-X, there is no separate
+        // host-side vector to look up or register from inside this
+        // constructor (that already happened once, device-wide, in
+        // `ConnectX3Nic::init()` before this function was ever called) -
+        // `_intr_vector`/`_base_vector` both just record the same
+        // "completion vector index" value for debugging (see this
+        // function's doc comment).
+        let intr_vector = base_vector;
 
         let mut ctx = EventQueueContext::new();
         ctx.set_status(EQ_STATUS_OK);
@@ -171,41 +208,62 @@ impl EventQueue {
         Ok(())
     }
 
-    /// Handle events.
+    /// Handle events, draining every EQE currently visible in the ring.
     ///
-    /// This can be called manually (polling) or from an interrupt.
-    pub(super) fn handle_events(&mut self, doorbells: &mut [MappedPages]) -> Result<(), &'static str> {
+    /// This can be called manually (polling) or from an interrupt - as of
+    /// extension 1, `Mlx4InterruptHandler::trigger()` is the only caller,
+    /// via `ConnectX3Nic::handle_interrupt()`.
+    ///
+    /// `on_completion` is invoked once per `Completion`-type EQE drained,
+    /// with the CQ number it names (see [`EventQueueEntry::completion_cqn`]).
+    /// Every other EQE type is drained (so the EQ doesn't stall) but
+    /// otherwise ignored for now - async/error events (`CqError`,
+    /// `PortChange`, ...) aren't wired to anything yet, matching this
+    /// driver's pre-existing scope (see `EventType`'s variants below).
+    ///
+    /// Always re-arms the EQ for further interrupts before returning
+    /// (`self.ring(doorbells, true)`), matching the pre-existing behavior
+    /// this function already had.
+    pub(super) fn handle_events<F: FnMut(u32)>(&mut self, doorbells: &mut [MappedPages], mut on_completion: F) -> Result<(), &'static str> {
         let mut set_ci: u32 = 0;
         loop {
-            if self.poll_one()? {
-                set_ci += 1;
-                if set_ci >= NUM_SPARE_EQE {
-                    self.ring(doorbells, false)?;
-                    set_ci = 0;
+            match self.poll_one()? {
+                Some(ConsumedEvent::Completion(cqn)) => {
+                    on_completion(cqn);
+                    set_ci += 1;
                 }
-                continue;
-            } else {
-                break;
+                Some(ConsumedEvent::Other) => {
+                    set_ci += 1;
+                }
+                None => break,
+            }
+            if set_ci >= NUM_SPARE_EQE {
+                self.ring(doorbells, false)?;
+                set_ci = 0;
             }
         }
         self.ring(doorbells, true)?;
         Ok(())
     }
 
-    /// Poll this event queue for one event.
-    ///
-    /// Return true if there are more.
-    fn poll_one(&mut self) -> Result<bool, &'static str> {
+    /// Poll this event queue for one event, returning what kind it was (if
+    /// any) so [`handle_events`](Self::handle_events) can act on
+    /// `Completion` events without leaking the raw [`EventQueueEntry`]
+    /// bitfield type outside this module.
+    fn poll_one(&mut self) -> Result<Option<ConsumedEvent>, &'static str> {
         if let Some(eqe) = self.get_next_eqe_sw()? {
             self.consumer_index += 1;
             trace!("got eqe: {:?}", eqe);
             // Make sure we read CQ entry contents after we've checked the
             // ownership bit.
             compiler_fence(Ordering::SeqCst);
-            // TODO: perhaps do something here
-            Ok(true)
+            let event = match EventType::from_repr(eqe.event_type().into()) {
+                Some(EventType::Completion) => ConsumedEvent::Completion(eqe.completion_cqn()),
+                _ => ConsumedEvent::Other,
+            };
+            Ok(Some(event))
         } else {
-            Ok(false)
+            Ok(None)
         }
     }
 
@@ -247,6 +305,16 @@ impl Drop for EventQueue {
             panic!("please destroy instead of dropping")
         }
     }
+}
+
+/// Result of consuming a single EQE via [`EventQueue::poll_one`].
+enum ConsumedEvent {
+    /// A `Completion` event, naming the CQ number that has new CQEs ready.
+    Completion(u32),
+    /// Any other event type - drained so the EQ doesn't stall, but not
+    /// otherwise acted on (async/error events aren't wired to anything in
+    /// this driver yet).
+    Other,
 }
 
 #[bitfield]
@@ -296,6 +364,22 @@ struct EventQueueContext {
     __: B96,
 }
 
+/// A single event queue entry. EQE size is 32 bytes on ConnectX-3 (64 B
+/// EQEs are also supported by the hardware but not used here) - matches
+/// upstream Linux mlx4_core's `struct mlx4_eqe`
+/// (`include/linux/mlx4/device.h`), verified against the current upstream
+/// source (`torvalds/linux`, `include/linux/mlx4/device.h` and
+/// `drivers/net/ethernet/mellanox/mlx4/eq.c`'s `mlx4_eq_int`) rather than
+/// derived from local memory of the layout, given how easy it is to get a
+/// bitfield offset like this subtly wrong.
+///
+/// `struct mlx4_eqe`'s 4-byte header (`reserved1, type, reserved2,
+/// subtype`) is `event_type`/`event_subtype` below (plus two skipped
+/// reserved bytes). What follows is a 24-byte `union event` whose exact
+/// interpretation depends on `event_type`; this driver only models the
+/// `Completion` variant (`union.comp: struct { __be32 cqn; }`) so far -
+/// every other event type's payload is left as opaque, skipped padding
+/// (`event_data1`'s low 64 bits, and the whole of `event_data2`).
 #[bitfield(bytes = 32)]
 struct EventQueueEntry {
     #[skip]
@@ -303,10 +387,22 @@ struct EventQueueEntry {
     event_type: u8,
     #[skip]
     __: u8,
-    #[skip]
     event_subtype: u8,
+    // `event_data1` is the first 12 of the union's 24 bytes. For a
+    // `Completion` event this is `struct { __be32 cqn; }` followed by 8
+    // reserved bytes - i.e. only the first 32-bit word (this struct's next
+    // two fields) is meaningful; the trailing `B64` is unused padding for
+    // every event type this driver understands. Mirrors Linux
+    // mlx4_eq_int's `cqn = be32_to_cpu(eqe->event.comp.cqn) & 0xffffff;`:
+    // one reserved/unused leading byte, then the CQ number in the low 24
+    // bits of that first big-endian word - the exact same "skip 1 byte,
+    // B24" shape as `CompletionQueueEntry::qp_number`
+    // (`completion_queue.rs`/`os/library/rdma/src/mlx4_hw.rs`).
     #[skip]
-    event_data1: B96,
+    __: u8,
+    completion_cqn: B24,
+    #[skip]
+    __: B64,
     #[skip]
     event_data2: B96,
     #[skip]
