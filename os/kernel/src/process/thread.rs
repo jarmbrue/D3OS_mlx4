@@ -602,6 +602,13 @@ unsafe extern "C" fn thread_switch(current_rsp0: *mut u64, next_rsp0: u64, next_
     naked_asm!(
     // Save registers of current thread
     "pushf",
+    // Protects the `swapgs`/`swapgs` pair below (unprotected otherwise,
+    // unlike `with_kernel_gs` in core_local_storage.rs): an interrupt
+    // landing mid-swap would run its handler's own GS access against the
+    // wrong base. No matching `sti` needed - `popf` below restores the
+    // incoming thread's own saved flags, which re-enables interrupts
+    // correctly on its own.
+    "cli",
     "push r8",
     "push r9",
     "push r10",

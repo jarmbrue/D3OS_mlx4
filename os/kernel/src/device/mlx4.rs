@@ -138,14 +138,12 @@ static MINOR: AtomicUsize = AtomicUsize::new(DEVICE_START);
 /// Fixed by using `IrqSaveSpinlock` instead of `spin::Mutex`: it disables
 /// this core's interrupts for the duration of the critical section
 /// (`crate::device::cpu::disable_int_nested`), so the mlx4 IRQ line simply
-/// cannot fire on this core while anything already holds this lock -  no
+/// cannot fire on this core while anything already holds this lock - no
 /// same-core reentrancy is possible by construction, unlike the
 /// `try_lock()`/`force_unlock()` idiom used elsewhere in this codebase for
 /// the same *class* of hazard (`InterruptDispatcher::dispatch`,
-/// `Apic::end_of_interrupt`, and this extension's own
-/// `Scheduler::force_try_lock` for `ready_state`/`blocked_list`, which
-/// couldn't use this same stronger fix without a much larger, out-of-scope
-/// change to `Scheduler`'s locking).
+/// `Apic::end_of_interrupt`). `Scheduler::blocked_list` uses the same
+/// `IrqSaveSpinlock` fix for the identical reason.
 static DEV_LIST: Once<IrqSaveSpinlock<Vec<ConnectX3Nic>>> = Once::new();
 
 fn next_minor() -> usize {
