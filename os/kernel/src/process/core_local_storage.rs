@@ -157,15 +157,20 @@ pub fn with_kernel_gs<R>(f: impl FnOnce() -> R) -> R {
         options(preserves_flags)
         );
         preempt_disable_no_swap();
-        core::arch::asm!("cli", options(nomem, nostack));
-        core::arch::asm!("swapgs", options(nomem, nostack, preserves_flags));
+        // No `options(nomem)` here (unlike a plain `cli`/`swapgs`): `swapgs`
+        // changes what a later `gs:`-prefixed load reads, so the compiler
+        // must not be told it's memory-independent - with everything here
+        // `#[inline(always)]`, that would let it reorder/merge "redundant"
+        // adjacent `swapgs` pairs across back-to-back calls.
+        core::arch::asm!("cli", options(nostack));
+        core::arch::asm!("swapgs", options(nostack, preserves_flags));
 
         let ret = f();
 
         // Swap GS back first, then restore IF if it was previously set
-        core::arch::asm!("swapgs", options(nomem, nostack, preserves_flags));
+        core::arch::asm!("swapgs", options(nostack, preserves_flags));
         if (rflags & (1 << 9)) != 0 {
-            core::arch::asm!("sti", options(nomem, nostack));
+            core::arch::asm!("sti", options(nostack));
         }
         preempt_enable_no_swap();
         ret
