@@ -12,7 +12,9 @@ use super::utils;
 use super::utils::{MappedPages, PageToFrameMapping};
 use crate::device::mlx4::utils::{FillOperation, OperationArgs};
 use crate::memory::PAGE_SIZE;
+use crate::sync::wait_queue::WaitQueue;
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 use log::{error, trace, warn};
 use modular_bitfield_msb::{
     bitfield,
@@ -53,6 +55,19 @@ pub(super) struct CompletionQueue {
     creator: Uuid,
     // TODO: bind the lifetime to the one of the event queue
     eq_number: Option<usize>,
+    /// Wait queue for threads genuinely blocked in `poll_cq`, waiting for a
+    /// completion on this CQ. Woken by `Mlx4InterruptHandler::trigger()`
+    /// once the associated EQ reports a `Completion` event naming this
+    /// CQ's number (`ConnectX3Nic::handle_interrupt`).
+    ///
+    /// `Arc`-wrapped (rather than a bare `WaitQueue`, as the plan's text
+    /// otherwise describes) so a caller can clone a cheap handle to it out
+    /// of `DEV_LIST`'s lock and then block on it *after* releasing that
+    /// lock (`ConnectX3Nic::arm_cq_for_wait`/`uverbs_cmd::uverbs_poll_cq`).
+    /// Blocking while still holding `DEV_LIST` would deadlock: the
+    /// interrupt handler that is supposed to wake this waiter also needs
+    /// `DEV_LIST`'s lock to find this CQ in the first place.
+    wq: Arc<WaitQueue>,
 }
 
 impl CompletionQueue {
@@ -111,6 +126,7 @@ impl CompletionQueue {
             consumer_index,
             eq_number,
             creator,
+            wq: Arc::new(WaitQueue::new()),
         };
         trace!("created new CQ: {:?}", cq);
         Ok(cq)
@@ -154,20 +170,22 @@ impl CompletionQueue {
 
     /// Poll this completion queue and return the number of new completions.
     ///
-    /// This is used by ibv_poll_cq.
+    /// This is used by ibv_poll_cq. As of extension 1
+    /// (`docs/thesis-plan-1-3.md`), this only ever drains this CQ's own CQE
+    /// ring directly - it deliberately does *not* also drain the
+    /// associated EQ inline anymore (the previous, commented-out attempt at
+    /// that is why `_eqs`/`_doorbells` below are unused parameters kept
+    /// only for call-site compatibility). CQEs are written directly to this
+    /// ring by hardware, independent of the EQ - the EQ is a pure
+    /// notification side channel ("go check CQ N"), not a data source, so
+    /// polling it inline here was never actually necessary for correctness,
+    /// only a leftover from before EQ draining had a real, async home.
+    /// That home is now `Mlx4InterruptHandler::trigger()` ->
+    /// `ConnectX3Nic::handle_interrupt()`, which drains the EQ and wakes
+    /// `self.wq` (see that field's docs) entirely off of this call path.
     pub(super) fn poll(
         &mut self, _eqs: &mut [EventQueue], qps: &mut [QueuePair], _doorbells: &mut [MappedPages], wc: &mut [ibv_wc],
     ) -> Result<usize, &'static str> {
-        // the event queue should be polled async and not while polling here !!!
-        // consider moving to seperate thread or impl. interrupts !
-
-        // try to poll the assiociated event queue first
-        /*if let Some(eq_number) = self.eq_number {
-            eqs.iter_mut()
-                .find(|eq| eq.number() == eq_number)
-                .ok_or("invalid event queue number")?
-                .handle_events(doorbells)?;
-        }*/
         let mut completions = 0;
         // poll one for as long as there are elements
         while completions < wc.len() {
@@ -345,6 +363,20 @@ impl CompletionQueue {
     /// Get the process that created this completion queue.
     pub(super) fn creator(&self) -> Uuid {
         self.creator
+    }
+
+    /// Clone a handle to this CQ's wait queue, for a caller that needs to
+    /// block on it *after* releasing `DEV_LIST`'s lock (see `wq`'s docs).
+    pub(super) fn wait_queue(&self) -> Arc<WaitQueue> {
+        self.wq.clone()
+    }
+
+    /// Wake every thread genuinely blocked in `poll_cq` on this CQ. Called
+    /// from `Mlx4InterruptHandler::trigger()` once the EQE getter added for
+    /// extension 1 (`EventQueueEntry::completion_cqn`) identifies a
+    /// `Completion` event naming this CQ's number.
+    pub(super) fn notify_waiters(&self) {
+        self.wq.notify_all();
     }
 
     /// Physical start address and byte length of this CQ's CQE ring buffer.
