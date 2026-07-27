@@ -41,8 +41,6 @@ pub const UVERBS_MAX_USER_TRUST_SIZE: usize = 0x06400000; // allow user space to
 pub const UVERBS_MAX_USER_WC_REQ: usize = 16000;
 pub const UVERBS_MAX_QUERY_DEVICES_REQ: usize = 10;
 
-const CHAR_BUF: &[u8] = &[0u8; 64];
-
 #[repr(C)]
 #[derive(Default, Debug, Copy, Clone)]
 pub struct UserMemory {
