@@ -19,6 +19,7 @@ use core3::io::{Error, ErrorKind, Result as Result};
 use strum_macros::FromRepr;
 
 pub mod ibv_qp_type {
+    #[repr(u8)]
     #[derive(Clone, Copy, PartialEq, Debug)]
     #[non_exhaustive]
     pub enum Type {
@@ -29,6 +30,7 @@ pub mod ibv_qp_type {
     pub use Type::IBV_QPT_UD;
 }
 
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct ibv_qp_cap {
     pub max_send_wr: u32,
@@ -41,6 +43,7 @@ pub struct ibv_qp_cap {
 pub type __be64 = u64;
 
 bitflags! {
+    #[repr(C)]
     #[derive(Default, Clone, Copy)]
     pub struct ibv_access_flags: i32 {
         const IBV_ACCESS_LOCAL_WRITE = 1;
@@ -55,11 +58,13 @@ bitflags! {
     }
 }
 
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ibv_device {
     pub handle: usize,
 }
 
+#[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct ibv_device_attr {
     pub fw_ver_major: u16,
@@ -105,17 +110,20 @@ pub enum PhysicalPortState {
     PhyTest = 7,
 }
 
+#[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct ibv_gid {
     pub raw: [u8; 16],
 }
 
+#[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct ibv_global_route {
     pub dgid: ibv_gid,
     pub hop_limit: u8,
 }
 
+#[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct ibv_ah_attr {
     pub grh: ibv_global_route,
@@ -126,6 +134,7 @@ pub struct ibv_ah_attr {
     pub port_num: u8,
 }
 
+#[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct ibv_qp_attr {
     pub qp_state: ibv_qp_state,
@@ -152,6 +161,7 @@ pub struct ibv_qp_attr {
 
 
 bitflags! {
+    #[repr(C)]
     #[derive(Clone, Copy)]
     pub struct ibv_qp_attr_mask: u32 {
         const IBV_QP_STATE = 1 << 0;
@@ -174,6 +184,7 @@ bitflags! {
     }
 }
 
+#[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct ibv_port_attr {
     pub state: ibv_port_state,
@@ -187,6 +198,7 @@ pub struct ibv_port_attr {
     pub phys_state: PhysicalPortState,
 }
 
+#[repr(u8)]
 #[derive(Default, Debug, Clone, Copy, PartialEq)]
 pub enum ibv_qp_state {
     #[default]
@@ -210,7 +222,7 @@ pub struct ibv_send_wr {
     pub __bindgen_anon_2: (),
 }
 
-impl Default for crate::ibverbs_sys::ibv_send_wr {
+impl Default for ibv_send_wr {
     fn default() -> Self {
         Self {
             wr_id: Default::default(),
@@ -319,6 +331,7 @@ pub struct ibv_sge {
 }
 
 pub mod ibv_wc_status {
+    #[repr(u8)]
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum Type {
         IBV_WC_SUCCESS, IBV_WC_LOC_LEN_ERR, IBV_WC_LOC_QP_OP_ERR,
@@ -334,6 +347,7 @@ pub mod ibv_wc_status {
 }
 
 pub mod ibv_wc_opcode {
+    #[repr(u8)]
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum Type {
         IBV_WC_SEND,
@@ -349,6 +363,7 @@ pub mod ibv_wc_opcode {
 }
 
 bitflags! {
+    #[repr(C)]
     #[derive(Debug, Clone, Copy)]
     pub struct ibv_wc_flags: u32 {
         const IBV_WC_GRH = 1;

@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 use bincode::{Decode, Encode};
 
+use crate::ibverbs_sys::{ibv_access_flags, ibv_qp_attr, ibv_qp_attr_mask, ibv_qp_cap, ibv_qp_type, ibv_send_flags, ibv_send_wr_wr, ibv_sge, ibv_wr_opcode};
 use syscall::return_vals::SyscallResult;
-use crate::ibverbs_sys::{ibv_access_flags, ibv_qp_attr, ibv_qp_attr_mask, ibv_qp_cap, ibv_qp_type, ibv_send_flags, ibv_send_wr, ibv_send_wr_wr, ibv_sge, ibv_wr_opcode};
 
 pub fn uverbs(device_fd: usize, cmd: UverbsCmd, user_memory: &UserMemory) -> SyscallResult {
     use syscall::{syscall, SystemCall::Uverb};
@@ -129,6 +129,7 @@ pub struct CreateQpRequest {
     pub ib_caps: ibv_qp_cap,
 }
 
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct CreateQpResponse {
     pub qp_num: u32,
@@ -142,14 +143,12 @@ pub struct ModifyQpRequest {
     pub attr_mask: ibv_qp_attr_mask
 }
 
-#[repr(C)]
 #[derive(Clone, Default, Encode, Decode)]
 pub struct PostSendRequest {
     pub qp_num: u32,
     pub wrs: Vec<SendWorkRequest>,
 }
 
-#[repr(C)]
 #[derive(Clone, Encode, Decode)]
 pub struct SendWorkRequest {
     pub wr_id: u64,
@@ -160,7 +159,6 @@ pub struct SendWorkRequest {
 }
 
 
-#[repr(C)]
 #[derive(Clone, Encode, Decode)]
 pub struct PostReceiveRequest {
     pub qp_num: u32,
