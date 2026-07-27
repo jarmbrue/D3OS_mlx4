@@ -14,4 +14,4 @@ bench = false
 # Local dependencies
 runtime = { path = "../../../library/runtime" }
 terminal = { path = "../../../library/terminal" }
-ibverbs = { path = "../../../library/ibverbs" }
+rdma = { path = "../../../library/rdma"}

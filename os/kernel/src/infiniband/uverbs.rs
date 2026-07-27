@@ -7,12 +7,13 @@ use core::mem::MaybeUninit;
 use core::slice::from_raw_parts_mut;
 use log::{debug, error};
 use rdma::uverbs_uapi::{PostReceiveRequest, QueryPortRequest, UserMemory, UVERBS_MAX_USER_WC_REQ};
-use rdma::{ibv_device, ibv_wc, uverbs_uapi::{
+use rdma::{uverbs_uapi::{
     CreateCqRequest, CreateMrRequest, CreateQpRequest, ModifyQpRequest,
     PollCqRequest, PostSendRequest, UverbsCmd,
 }};
 use syscall::return_vals::{Errno, SyscallResult};
 use x86_64::VirtAddr;
+use rdma::ibverbs_sys::{ibv_wc, ibv_device};
 
 /// user_in is a pointer to the parameters provided by the user
 /// user_out points to a user buffer for return values

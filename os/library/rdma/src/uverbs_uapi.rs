@@ -1,7 +1,14 @@
 use alloc::vec::Vec;
 use bincode::{Decode, Encode};
 
-use super::ib_core::*;
+use syscall::return_vals::SyscallResult;
+use crate::ibverbs_sys::{ibv_access_flags, ibv_qp_attr, ibv_qp_attr_mask, ibv_qp_cap, ibv_qp_type, ibv_send_flags, ibv_send_wr, ibv_send_wr_wr, ibv_sge, ibv_wr_opcode};
+
+pub fn uverbs(device_fd: usize, cmd: UverbsCmd, user_memory: &UserMemory) -> SyscallResult {
+    use syscall::{syscall, SystemCall::Uverb};
+    syscall(Uverb, &[device_fd, cmd as u64 as usize, user_memory as *const _ as usize])
+}
+
 
 #[repr(u64)]
 #[derive(Debug, Copy, Clone)]
@@ -133,31 +140,6 @@ pub struct ModifyQpRequest {
     pub qp_num: u32,
     pub attr: ibv_qp_attr,
     pub attr_mask: ibv_qp_attr_mask
-}
-
-impl Default for ibv_send_wr {
-    fn default() -> Self {
-        Self { 
-            wr_id: Default::default(), 
-            next: Default::default(), 
-            sg_list: Default::default(), 
-            opcode: ibv_wr_opcode::IBV_WR_SEND,
-            send_flags: ibv_send_flags::SIGNALED, 
-            __bindgen_anon_1: Default::default(), 
-            wr: Default::default(), 
-            qp_type: Default::default(), 
-            __bindgen_anon_2: Default::default() }
-    }
-}
-
-impl Default for ibv_recv_wr {
-    fn default() -> Self {
-        Self { 
-            wr_id: Default::default(), 
-            next: Default::default(), 
-            sg_list: Default::default(), 
-        }
-    }
 }
 
 #[repr(C)]

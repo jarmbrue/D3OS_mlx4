@@ -19,8 +19,8 @@ use modular_bitfield_msb::{
     bitfield,
     prelude::{B12, B16, B17, B19, B2, B20, B24, B3, B4, B40, B48, B5, B53, B56, B6, B7},
 };
-use rdma::{
-    ibv_access_flags, ibv_mtu, ibv_qp_attr, ibv_qp_attr_mask, ibv_qp_cap, ibv_qp_state, ibv_qp_type, ibv_recv_wr, ibv_send_flags, ibv_send_wr, ibv_send_wr_wr,
+use rdma::ibverbs_sys::{
+    ibv_access_flags, ibv_mtu, ibv_qp_attr, ibv_qp_attr_mask, ibv_qp_cap, ibv_qp_state, ibv_qp_type, ibv_send_flags, ibv_send_wr_wr,
     ibv_sge, ibv_wr_opcode,
 };
 use strum_macros::FromRepr;

@@ -60,13 +60,11 @@
 //! [RDMAmojo]: http://www.rdmamojo.com/
 //! [1]: http://www.rdmamojo.com/2012/05/18/libibverbs/
 
-#![no_std]
 //#![deny(missing_docs)]
 // avoid warnings about RDMAmojo, iWARP, InfiniBand, etc. not being in backticks
 #![allow(clippy::doc_markdown)]
 
 extern crate alloc;
-mod ibverbs_sys;
 
 use core::convert::TryInto;
 use core::ffi::CStr;
@@ -77,27 +75,17 @@ use core::ptr;
 use mm::MmapFlags;
 use mm::mmap;
 
-use ibverbs_sys as ffi;
+use crate::ibverbs_sys as ffi;
+use crate::sliceindex;
 
 use alloc::{boxed::Box, ffi::CString, vec::Vec};
 use core3::io;
 
 const PORT_NUM: u8 = 1;
 
-/// Direct access to low-level libverbs FFI.
-pub use ffi::ibv_mtu;
-pub use ffi::ibv_qp_type;
-pub use ffi::ibv_wc;
-
 #[cfg(feature = "serialize")]
 use bincode::{Decode, Encode};
 
-/// Access flags for use with `QueuePair` and `MemoryRegion`.
-pub use ffi::ibv_access_flags;
-
-/// Because `std::slice::SliceIndex` is still unstable, we follow @alexcrichton's suggestion in
-/// https://github.com/rust-lang/rust/issues/35729 and implement it ourselves.
-pub mod sliceindex;
 
 /// Get list of available RDMA devices.
 ///
@@ -494,7 +482,7 @@ pub struct QueuePairBuilder<'res> {
     /// only valid for RC
     max_dest_rd_atomic: Option<u8>,
     /// only valid for RC and UC
-    path_mtu: Option<ibv_mtu>,
+    path_mtu: Option<ffi::ibv_mtu>,
     /// only valid for RC and UC
     rq_psn: Option<u32>,
 }
@@ -754,7 +742,7 @@ impl<'res> QueuePairBuilder<'res> {
     ///  - 3: 1024
     ///  - 4: 2048
     ///  - 5: 4096
-    pub fn set_path_mtu(&mut self, path_mtu: ibv_mtu) -> &mut Self {
+    pub fn set_path_mtu(&mut self, path_mtu: ffi::ibv_mtu) -> &mut Self {
         if self.qp_type == ffi::ibv_qp_type::IBV_QPT_RC
             || self.qp_type == ffi::ibv_qp_type::IBV_QPT_UC
         {
@@ -872,7 +860,7 @@ pub struct PreparedQueuePair<'res> {
     /// only valid for RC
     max_dest_rd_atomic: Option<u8>,
     /// only valid for RC and UC
-    path_mtu: Option<ibv_mtu>,
+    path_mtu: Option<ffi::ibv_mtu>,
     /// only valid for RC and UC
     rq_psn: Option<u32>,
 }

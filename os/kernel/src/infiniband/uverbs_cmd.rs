@@ -1,7 +1,7 @@
 use crate::device::mlx4::{get_dev_list, device_handle_to_idx, ConnectX3Nic};
 use alloc::vec::Vec;
 use rdma::uverbs_uapi::{CreateCqRequest, CreateCqResponse, CreateMrResponse, CreateQpRequest, ModifyQpRequest, PostReceiveRequest, PostSendRequest};
-use rdma::{ibv_access_flags, ibv_device, ibv_device_attr, ibv_port_attr, ibv_wc};
+use rdma::ibverbs_sys::{ibv_access_flags, ibv_device, ibv_device_attr, ibv_port_attr, ibv_wc};
 
 pub fn uverbs_query_devices(max_len: usize) -> Vec<ibv_device> {
     get_dev_list().lock().iter()

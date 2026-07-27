@@ -1,3 +1,5 @@
+/// Because `std::slice::SliceIndex` is still unstable, we follow @alexcrichton's suggestion in
+/// https://github.com/rust-lang/rust/issues/35729 and implement it ourselves.
 use core::ops;
 
 pub trait SliceIndex<T: ?Sized> {

@@ -19,7 +19,7 @@ use modular_bitfield_msb::{
     prelude::{B12, B4, B7},
     specifiers::{B2, B24, B3, B40, B48, B5, B6},
 };
-use rdma::{ibv_wc, ibv_wc_flags, ibv_wc_opcode, ibv_wc_status};
+use rdma::ibverbs_sys::{ibv_wc, ibv_wc_flags, ibv_wc_opcode, ibv_wc_status};
 use strum_macros::FromRepr;
 use tock_registers::{interfaces::Writeable, registers::WriteOnly};
 

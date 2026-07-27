@@ -5,8 +5,15 @@ version = "0.1.0"
 authors = [ "Sandro Jose Leal Miudo" ]
 
 [dependencies]
+syscall = { path = "../syscall"}
+mm = {path = "../mm"}
+
 # External depencies
 bitflags = "2.9.0"
 strum_macros = "0.26"
 bincode = { version = "2.0.1", default-features = false, features = ["alloc", "derive"]}
-num_enum = { version = "0.5", default-features = false }
+core3 = { version = "0.1", default-features = false }
+
+[features]
+default = ["serialize"]
+serialize = []

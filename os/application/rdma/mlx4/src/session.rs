@@ -1,7 +1,6 @@
-use ibverbs::{Context, ProtectionDomain, LocalMemoryRegion, CompletionQueue, QueuePairBuilder};
-use ibverbs::sliceindex::SliceIndex;
-use ibverbs::{ibv_qp_type::Type, ibv_wc};
-use rdma::ibv_qp_cap;
+use rdma::ibverbs::{Context, ProtectionDomain, LocalMemoryRegion, CompletionQueue, QueuePairBuilder};
+use rdma::sliceindex::SliceIndex;
+use rdma::ibverbs_sys::{ibv_qp_type::Type, ibv_wc, ibv_qp_cap};
 use core::ops;
 use core::slice::from_raw_parts_mut;
 use terminal::println;

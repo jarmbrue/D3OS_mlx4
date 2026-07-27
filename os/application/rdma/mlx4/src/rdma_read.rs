@@ -1,9 +1,7 @@
 use super::{session, handshake, integrity};
 use mm::{MmapFlags, mmap};
-use ibverbs::{
-    devices, LocalMemoryRegion
-};
-use rdma::ibv_send_flags;
+use rdma::ibverbs;
+use rdma::ibverbs_sys::ibv_send_flags;
 use super::bench;
 use super::*;
 use alloc::{vec};
@@ -24,7 +22,7 @@ pub fn invoke(config: RunConfig) {
     println!("waiting for device context");
 
     let ctx = loop {
-        let res_ctx = devices()
+        let res_ctx = ibverbs::devices()
             .expect("failed to get device list")
             .iter()
             .next()

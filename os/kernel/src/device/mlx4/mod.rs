@@ -24,7 +24,7 @@ use icm::MappedIcmTables;
 use log::trace;
 use pci_types::{CommandRegister, EndpointHeader};
 
-use rdma::{ibv_access_flags, ibv_device_attr, ibv_port_attr, ibv_qp_attr, ibv_qp_attr_mask, ibv_qp_cap, ibv_qp_type, ibv_recv_wr, ibv_send_wr, ibv_wc};
+use rdma::ibverbs_sys::{ibv_access_flags, ibv_device_attr, ibv_port_attr, ibv_qp_attr, ibv_qp_attr_mask, ibv_qp_cap, ibv_qp_type, ibv_recv_wr, ibv_send_wr, ibv_wc};
 
 use crate::pci_bus;
 use port::Port;

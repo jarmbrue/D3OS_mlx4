@@ -1,11 +1,11 @@
 #![no_std]
 
 use terminal::{print, println};
-use ibverbs::devices;
+use rdma::ibverbs;
 use runtime::*;
 
 pub fn invoke() {
-    let devices = devices().expect("failed to get device list");
+    let devices = ibverbs::devices().expect("failed to get device list");
     println!("Found {} devices", devices.len());
 
     for dev in devices.iter() {

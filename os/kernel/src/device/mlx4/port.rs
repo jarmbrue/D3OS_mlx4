@@ -8,7 +8,7 @@ use modular_bitfield_msb::{
     prelude::{B3, B5, B11, B28, B60, B84},
     specifiers::{B2, B4, B9, B48},
 };
-use rdma::{PhysicalPortState, ibv_mtu, ibv_port_attr, ibv_port_state};
+use rdma::ibverbs_sys::{PhysicalPortState, ibv_mtu, ibv_port_attr, ibv_port_state};
 use zerocopy::{AsBytes, FromBytes, U16, U32, U64};
 use super::cmd::{CommandInterface, MadIfcOpcodeModifier, Opcode, SetPortOpcodeModifier};
 use super::utils::MappedPages;

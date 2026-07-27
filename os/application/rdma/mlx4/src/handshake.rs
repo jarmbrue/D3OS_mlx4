@@ -1,6 +1,6 @@
 use bincode::{config::standard, decode_from_slice, encode_into_slice};
 use concurrent::thread::sleep;
-use ibverbs::{QueuePairEndpoint, RemoteMemoryRegion};
+use rdma::ibverbs::{QueuePairEndpoint, RemoteMemoryRegion};
 use network::TcpStream;
 use terminal::{println};
 

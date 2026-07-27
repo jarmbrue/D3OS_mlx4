@@ -6,8 +6,8 @@ use concurrent::thread::sleep;
 use core::net::SocketAddr;
 use core::{arch::x86_64::_mm_mfence};
 use cpu_core::flush_cache;
-use rdma::ibv_send_flags;
-use ibverbs::devices;
+use rdma::ibverbs_sys::ibv_send_flags;
+use rdma::ibverbs::devices;
 
 pub fn invoke(config: RunConfig) {
     let min_cq_entries = 64;

@@ -14,7 +14,7 @@ use modular_bitfield_msb::{
     bitfield,
     specifiers::{B1, B10, B104, B11, B12, B15, B2, B20, B22, B24, B25, B27, B3, B31, B36, B4, B42, B45, B5, B6, B63, B7, B72, B88, B91},
 };
-use rdma::ibv_mtu;
+use rdma::ibverbs_sys::ibv_mtu;
 use x86_64::structures::paging::{page::Page, Size4KiB};
 use x86_64::structures::paging::frame::PhysFrameRange;
 use zerocopy::{AsBytes, FromBytes, U16, U64};
