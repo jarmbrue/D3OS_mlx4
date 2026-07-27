@@ -172,9 +172,3 @@ pub struct ReceiveWorkRequest {
     pub wr_id: u64,
     pub sges: Vec<ibv_sge>,
 }
-
-impl From<(u32, usize, u32, u32)> for CreateMrResponse {
-    fn from(value: (u32, usize, u32, u32)) -> Self {
-        CreateMrResponse { index: value.0, addr: value.1, lkey: value.2, rkey: value.3 }
-    }
-}
