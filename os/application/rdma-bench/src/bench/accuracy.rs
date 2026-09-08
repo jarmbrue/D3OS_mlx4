@@ -17,8 +17,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Range;
 use cpu_core::flush_cache;
-use ibverbs::{ibv_wc, CompletionQueue, LocalMemoryRegion, ProtectionDomain, QueuePair};
-use ibverbs::ffi::ibv_send_flags;
+use ibverbs::{completion_queue::WorkCompletion, CompletionQueue, LocalMemoryRegion, ProtectionDomain, QueuePair};
+use ibverbs::ffi::SendFlags;
 use time::get_time_in_us;
 
 const HEADER_LEN: usize = 8;
@@ -87,12 +87,12 @@ fn send(
     for seq in 0..window {
         let range = slot_range(seq, msg_size);
         fill_payload(&mut mr[range.clone()], seq as u64);
-        unsafe { qp.post_send(mr, vec![vec![range]], vec![seq as u64], vec![ibv_send_flags::SIGNALED])? };
+        unsafe { qp.post_send(mr, vec![vec![range]], vec![seq as u64], vec![SendFlags::SIGNALED])? };
     }
 
     let mut posted = window;
     let mut completed = 0usize;
-    let mut wc = vec![ibv_wc::default(); window];
+    let mut wc = vec![WorkCompletion::default(); window];
 
     conn.sync()?; // "ready" (defensive addition versus the Linux port, see receive()'s comment)
 
@@ -110,7 +110,7 @@ fn send(
                 let slot = posted % window;
                 let range = slot_range(slot, msg_size);
                 fill_payload(&mut mr[range.clone()], posted as u64);
-                unsafe { qp.post_send(mr, vec![vec![range]], vec![posted as u64], vec![ibv_send_flags::SIGNALED])? };
+                unsafe { qp.post_send(mr, vec![vec![range]], vec![posted as u64], vec![SendFlags::SIGNALED])? };
                 posted += 1;
             }
         }
@@ -138,7 +138,7 @@ fn receive(
     let mut report = AccuracyReport { msg_size, sent: iterations, ..AccuracyReport::default() };
     let mut seen = vec![false; iterations];
     let mut expected = vec![0u8; msg_size];
-    let mut wc = vec![ibv_wc::default(); window];
+    let mut wc = vec![WorkCompletion::default(); window];
     let mut batch: Vec<(usize, usize)> = Vec::with_capacity(window);
 
     // Not present in the Linux port's sketch, but harmless and closes a real race: without it
