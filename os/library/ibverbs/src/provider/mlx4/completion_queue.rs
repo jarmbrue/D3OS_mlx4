@@ -13,19 +13,17 @@ use core3::io;
 use core3::io::{Error, ErrorKind};
 use log::{error, warn};
 use modular_bitfield_msb::{
-    bitfield,
-    prelude::{B4, B7, B12},
-    specifiers::{B5, B24},
+    bitfield, prelude::*,
 };
 use spin::Mutex;
 use mm::{mmap, MmapFlags, PAGE_SIZE};
-use rdma::ib_core::{ibv_wc, ibv_wc_flags, ibv_wc_opcode, ibv_wc_status};
 use rdma::uverbs_uapi::{CreateCqRequest, CreateCqResponse, UserSlice};
 use rdma::uverbs_uapi::UverbsCmd::{CreateCq, DestroyCq, DrainEvents};
 use strum_macros::FromRepr;
 use tock_registers::interfaces::Writeable;
 use tock_registers::registers::WriteOnly;
 use crate::cmd::uverbs;
+use crate::completion_queue::{WorkCompletion, WorkCompletionFlags, WorkCompletionOpcode, WorkCompletionStatus};
 use crate::provider::IbvCompletionQueue;
 use super::Mlx4Context;
 use super::queue_pair::{DoorbellPage, QueuePairOpcode};
@@ -66,7 +64,7 @@ impl IbvCompletionQueue for CompletionQueue {
     ///
     /// This is used by ibv_poll_cq. `device` is the shared registry of live queue pairs used to
     /// resolve a CQE's `wr_id` and advance the queue pair's tail.
-    fn poll(&self, wc: &mut [ibv_wc]) -> io::Result<usize> {
+    fn poll(&self, wc: &mut [WorkCompletion]) -> io::Result<usize> {
         let poll_count = self.poll_count.fetch_add(1, Ordering::AcqRel);
         let mut consumer_index = self.consumer_index.lock();
         if (poll_count + 1) % DRAIN_EVENTS_INTERVAL == 0 {
@@ -163,10 +161,10 @@ impl CompletionQueue {
     ///
     /// Return true if there are more.
     #[allow(unreachable_patterns)]
-    fn poll_one(&self, index: u32, wc: &mut ibv_wc) -> io::Result<bool> {
+    fn poll_one(&self, index: u32, wc: &mut WorkCompletion) -> io::Result<bool> {
         const CQE_OPCODE_ERROR: u8 = 0x1e;
         // clear the wc first
-        *wc = ibv_wc::default();
+        *wc = WorkCompletion::default();
         if let Some(cqe) = self.get_cqe_sw(index) {
             // Make sure we read CQ entry contents after we've checked the
             // ownership bit.
@@ -178,14 +176,14 @@ impl CompletionQueue {
             }
             if cqe.opcode() == CQE_OPCODE_ERROR {
                 let checksum_bytes = cqe.checksum().to_be_bytes();
-                let vendor_err_syndrome = checksum_bytes[0];
-                let syndrome = Syndrome::from_repr(checksum_bytes[1]).ok_or(Error::new(ErrorKind::Other, "invalid error syndrome"))?;
+                wc.vendor_err = checksum_bytes[0].into();
+                wc.status = parse_syndrome(checksum_bytes[1]);
                 error!(
                     "work completion error: (QPN {}, WQE index {}, vendor syndrome {}, syndrome {:?}, opcode {})",
                     cqe.qp_number(),
                     cqe.wqe_index(),
-                    vendor_err_syndrome,
-                    syndrome,
+                    wc.vendor_err,
+                    wc.status,
                     cqe.opcode(),
                 );
                 // A WR error (this one included, since a QP that hits any error goes to the
@@ -197,61 +195,44 @@ impl CompletionQueue {
                 // too rare to catch it before a short-lived benchmark run already aborted on this
                 // exact completion. Force an out-of-band drain right here instead.
                 let _ = uverbs(self.context.device_handle, DrainEvents, UserSlice::EMPTY, UserSlice::EMPTY);
-                wc.status = match syndrome {
-                    Syndrome::LocalLengthError => ibv_wc_status::IBV_WC_LOC_LEN_ERR,
-                    Syndrome::LocalQpOperationError => ibv_wc_status::IBV_WC_LOC_QP_OP_ERR,
-                    Syndrome::LocalProtError => ibv_wc_status::IBV_WC_LOC_PROT_ERR,
-                    Syndrome::WrFlushError => ibv_wc_status::IBV_WC_WR_FLUSH_ERR,
-                    Syndrome::MwBindError => ibv_wc_status::IBV_WC_MW_BIND_ERR,
-                    Syndrome::BadResponseError => ibv_wc_status::IBV_WC_BAD_RESP_ERR,
-                    Syndrome::LocalAccessError => ibv_wc_status::IBV_WC_LOC_ACCESS_ERR,
-                    Syndrome::RemoteInvalidRequestError => ibv_wc_status::IBV_WC_REM_INV_REQ_ERR,
-                    Syndrome::RemoteAccessError => ibv_wc_status::IBV_WC_REM_ACCESS_ERR,
-                    Syndrome::RemoteOperationError => ibv_wc_status::IBV_WC_REM_OP_ERR,
-                    Syndrome::TransportRetryExceededError => ibv_wc_status::IBV_WC_RETRY_EXC_ERR,
-                    Syndrome::RnrRetryExceededError => ibv_wc_status::Type::IBV_WC_RNR_RETRY_EXC_ERR,
-                    Syndrome::RemoteAbortedErr => ibv_wc_status::IBV_WC_REM_ABORT_ERR,
-                    _ => ibv_wc_status::Type::IBV_WC_GENERAL_ERR,
-                };
-                wc.vendor_err = vendor_err_syndrome.into();
                 return Ok(true);
             }
-            wc.status = ibv_wc_status::IBV_WC_SUCCESS;
-            wc.wc_flags = ibv_wc_flags::empty();
+            wc.status = WorkCompletionStatus::Success;
+            wc.wc_flags = WorkCompletionFlags::empty();
             if cqe.is_send() {
                 let opcode = QueuePairOpcode::from_repr(cqe.opcode().into()).ok_or(Error::new(ErrorKind::Other, "invalid opcode"))?;
                 match opcode {
                     QueuePairOpcode::RdmaWrite => {
-                        wc.opcode = ibv_wc_opcode::IBV_WC_RDMA_WRITE;
+                        wc.opcode = WorkCompletionOpcode::RdmaWrite;
                     }
                     QueuePairOpcode::RdmaWriteImm => {
-                        wc.opcode = ibv_wc_opcode::IBV_WC_RDMA_WRITE;
-                        wc.wc_flags.insert(ibv_wc_flags::IBV_WC_WITH_IMM);
+                        wc.opcode = WorkCompletionOpcode::RdmaWrite;
+                        wc.wc_flags.insert(WorkCompletionFlags::IBV_WC_WITH_IMM);
                     }
                     QueuePairOpcode::Send => {
-                        wc.opcode = ibv_wc_opcode::IBV_WC_SEND;
+                        wc.opcode = WorkCompletionOpcode::Send;
                     }
                     QueuePairOpcode::SendImm => {
-                        wc.opcode = ibv_wc_opcode::IBV_WC_SEND;
-                        wc.wc_flags.insert(ibv_wc_flags::IBV_WC_WITH_IMM);
+                        wc.opcode = WorkCompletionOpcode::Send;
+                        wc.wc_flags.insert(WorkCompletionFlags::IBV_WC_WITH_IMM);
                     }
                     QueuePairOpcode::SendInval => {
-                        wc.opcode = ibv_wc_opcode::IBV_WC_SEND;
+                        wc.opcode = WorkCompletionOpcode::Send;
                     }
                     QueuePairOpcode::RdmaRead => {
-                        wc.opcode = ibv_wc_opcode::IBV_WC_RDMA_READ;
+                        wc.opcode = WorkCompletionOpcode::RdmaRead;
                         wc.byte_len = cqe.byte_cnt();
                     }
                     QueuePairOpcode::AtomicCs | QueuePairOpcode::MaskedAtomicCs => {
-                        wc.opcode = ibv_wc_opcode::IBV_WC_COMP_SWAP;
+                        wc.opcode = WorkCompletionOpcode::CompareAndSwap;
                         wc.byte_len = 8;
                     }
                     QueuePairOpcode::AtomicFa | QueuePairOpcode::MaskedAtomicFa => {
-                        wc.opcode = ibv_wc_opcode::IBV_WC_FETCH_ADD;
+                        wc.opcode = WorkCompletionOpcode::FetchAdd;
                         wc.byte_len = 8;
                     }
                     QueuePairOpcode::LocalInval => {
-                        wc.opcode = ibv_wc_opcode::IBV_WC_LOCAL_INV;
+                        wc.opcode = WorkCompletionOpcode::LocalInvalidate;
                     }
                     _ => {}
                 }
@@ -260,28 +241,28 @@ impl CompletionQueue {
                 wc.byte_len = cqe.byte_cnt();
                 match opcode {
                     ReceiveOpcode::RdmaWriteImm => {
-                        wc.opcode = ibv_wc_opcode::IBV_WC_RECV_RDMA_WITH_IMM;
-                        wc.wc_flags.insert(ibv_wc_flags::IBV_WC_WITH_IMM);
+                        wc.opcode = WorkCompletionOpcode::RecvRdmaWithImm;
+                        wc.wc_flags.insert(WorkCompletionFlags::IBV_WC_WITH_IMM);
                         wc.imm_data = cqe.immed_rss_invalid();
                     }
                     ReceiveOpcode::SendInval => {
-                        wc.opcode = ibv_wc_opcode::IBV_WC_RECV;
-                        wc.wc_flags.insert(ibv_wc_flags::IBV_WC_WITH_INV);
+                        wc.opcode = WorkCompletionOpcode::Recv;
+                        wc.wc_flags.insert(WorkCompletionFlags::IBV_WC_WITH_INV);
                         todo!("set invalidate_rkey");
                     }
                     ReceiveOpcode::Send => {
-                        wc.opcode = ibv_wc_opcode::IBV_WC_RECV;
+                        wc.opcode = WorkCompletionOpcode::Recv;
                     }
                     ReceiveOpcode::SendImm => {
-                        wc.opcode = ibv_wc_opcode::IBV_WC_RECV;
-                        wc.wc_flags.insert(ibv_wc_flags::IBV_WC_WITH_IMM);
+                        wc.opcode = WorkCompletionOpcode::Recv;
+                        wc.wc_flags.insert(WorkCompletionFlags::IBV_WC_WITH_IMM);
                         wc.imm_data = cqe.immed_rss_invalid();
                     }
                 }
                 wc.src_qp = cqe.rqpn();
                 wc.dlid_path_bits = cqe.mlpath();
                 if cqe.g() {
-                    wc.wc_flags.insert(ibv_wc_flags::IBV_WC_GRH);
+                    wc.wc_flags.insert(WorkCompletionFlags::IBV_WC_GRH);
                 }
                 wc.pkey_index = (cqe.immed_rss_invalid() & 0x7f).try_into().unwrap();
                 wc.slid = cqe.slid();
@@ -335,7 +316,7 @@ struct CompletionQueueEntry {
     byte_cnt: u32,
     wqe_index: u16,
     /// vendor_err_syndrome (u8) and syndrome (u8) on error
-    checksum: u16,
+    checksum: B16,
     #[skip]
     __: B24,
     owner: bool,
@@ -345,22 +326,24 @@ struct CompletionQueueEntry {
     opcode: B5,
 }
 
-#[repr(u8)]
-#[derive(Debug, FromRepr)]
-enum Syndrome {
-    LocalLengthError = 0x01,
-    LocalQpOperationError = 0x02,
-    LocalProtError = 0x04,
-    WrFlushError = 0x05,
-    MwBindError = 0x06,
-    BadResponseError = 0x10,
-    LocalAccessError = 0x11,
-    RemoteInvalidRequestError = 0x12,
-    RemoteAccessError = 0x13,
-    RemoteOperationError = 0x14,
-    TransportRetryExceededError = 0x15,
-    RnrRetryExceededError = 0x16,
-    RemoteAbortedErr = 0x22,
+/// parse ConnectX-3 specific Work Completion syndromes
+fn parse_syndrome(syndrome: u8) -> WorkCompletionStatus {
+    match syndrome {
+        0x01 => WorkCompletionStatus::LocalLengthError,
+        0x02 => WorkCompletionStatus::LocalQpOperationError,
+        0x04 => WorkCompletionStatus::LocalProtError,
+        0x05 => WorkCompletionStatus::WrFlushError,
+        0x06 => WorkCompletionStatus::MwBindError,
+        0x10 => WorkCompletionStatus::BadResponseError,
+        0x11 => WorkCompletionStatus::LocalAccessError,
+        0x12 => WorkCompletionStatus::RemoteInvalidRequestError,
+        0x13 => WorkCompletionStatus::RemoteAccessError,
+        0x14 => WorkCompletionStatus::RemoteOperationError,
+        0x15 => WorkCompletionStatus::TransportRetryExceededError,
+        0x16 => WorkCompletionStatus::RnrRetryExceededError,
+        0x22 => WorkCompletionStatus::RemoteAbortedErr,
+        _ => WorkCompletionStatus::GeneralError
+    }
 }
 
 #[repr(u32)]

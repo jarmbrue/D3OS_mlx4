@@ -1,28 +1,28 @@
 use crate::device::mlx4::{get_dev_list, device_handle_to_idx, ConnectX3Nic};
 use alloc::vec::Vec;
 use rdma::uverbs_uapi::{CreateCqRequest, CreateCqResponse, CreateMrResponse, CreateQpRequest, CreateQpResponse, ModifyQpRequest};
-use rdma::{ibv_access_flags, ibv_device, ibv_device_attr, ibv_port_attr};
+use rdma::{AccessFlags, Device, DeviceAttr, PortAttr};
 
-pub fn uverbs_query_devices(max_len: usize) -> Vec<ibv_device> {
+pub fn uverbs_query_devices(max_len: usize) -> Vec<Device> {
     get_dev_list().lock().iter()
-        .map(|dev| ibv_device { handle: dev.handle } )
+        .map(|dev| Device { handle: dev.handle } )
         .take(max_len)
         .collect()
 }
 
-pub fn uverbs_query_device(device_handle: usize) -> Result<ibv_device_attr, &'static str> {
+pub fn uverbs_query_device(device_handle: usize) -> Result<DeviceAttr, &'static str> {
     get_dev_list().lock()
         .get_mut(device_handle_to_idx(device_handle)).unwrap()
         .query_device()
 }
 
-pub fn uverbs_query_port(device_handle: usize, port_num: u8) -> Result<ibv_port_attr, &'static str> {
+pub fn uverbs_query_port(device_handle: usize, port_num: u8) -> Result<PortAttr, &'static str> {
     get_dev_list().lock()
         .get_mut(device_handle_to_idx(device_handle)).unwrap()
         .query_port(port_num)
 }
 
-pub fn uverbs_register_mem_region(device_handle: usize, access_flags: ibv_access_flags, user_data_ref: &mut [u8]) -> Result<CreateMrResponse, &'static str> {
+pub fn uverbs_register_mem_region(device_handle: usize, access_flags: AccessFlags, user_data_ref: &mut [u8]) -> Result<CreateMrResponse, &'static str> {
     get_dev_list().lock().get_mut(device_handle_to_idx(device_handle)).unwrap()
         .create_mr(user_data_ref, access_flags)
         .map(|d| {
